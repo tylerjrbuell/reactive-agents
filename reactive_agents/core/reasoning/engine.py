@@ -30,9 +30,7 @@ from .prompts.base import (
     StrategyTransitionPrompt,
     PlanExtensionPrompt,
     TaskGoalEvaluationPrompt,
-    ToolCallSystemPrompt,
     MemorySummarizationPrompt,
-    OllamaManualToolPrompt,
     ExecutionResultSummaryPrompt,
 )
 
@@ -74,9 +72,7 @@ class ReasoningEngine:
             "strategy_transition": StrategyTransitionPrompt(context),
             "plan_extension": PlanExtensionPrompt(context),
             "task_goal_evaluation": TaskGoalEvaluationPrompt(context),
-            "tool_call_system": ToolCallSystemPrompt(context),
             "memory_summarization": MemorySummarizationPrompt(context),
-            "ollama_manual_tool": OllamaManualToolPrompt(context),
             "execution_result_summary": ExecutionResultSummaryPrompt(context),
         }
 

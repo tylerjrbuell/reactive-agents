@@ -1,11 +1,15 @@
 import json
 import os
 import time
-from typing import List, Dict, Any, Optional, Union
+import asyncio
+import random
+from typing import List, Dict, Any, Optional, Type, Union
+from openai import BaseModel
 import requests
 from anthropic import Anthropic
 from anthropic.types import Message, MessageParam, TextBlock, ToolUseBlock
 from anthropic import APIError, RateLimitError, APITimeoutError
+import instructor
 
 from .base import BaseModelProvider, CompletionMessage, CompletionResponse
 
@@ -54,10 +58,37 @@ class AnthropicModelProvider(BaseModelProvider):
 
         self.client = Anthropic(**client_params)  # type: ignore
 
+        # Initialize instructor client for structured outputs
+        try:
+            self.instructor_client = instructor.from_anthropic(
+                self.client, mode=instructor.Mode.ANTHROPIC_TOOLS
+            )
+            self._supports_structured = True
+        except Exception as e:
+            if context and hasattr(context, "agent_logger") and context.agent_logger:
+                context.agent_logger.warning(
+                    f"Failed to initialize Instructor client for Anthropic: {e}"
+                )
+            self.instructor_client = None
+            self._supports_structured = False
+
         # Default options
         self.default_options = {
             "temperature": 0.7,
             "max_tokens": 1000,
+        }
+
+        # Rate limiting configuration
+        self.rate_limit_config = {
+            "max_retries": options.get("max_retries", 3) if options else 3,
+            "base_delay": options.get("base_delay", 1.0) if options else 1.0,
+            "max_delay": (
+                options.get("max_delay", 120.0) if options else 120.0
+            ),  # 2 minutes max
+            "jitter_factor": options.get("jitter_factor", 0.1) if options else 0.1,
+            "rate_limit_retry_delay": (
+                options.get("rate_limit_retry_delay", 30) if options else 30
+            ),  # Default 30 seconds for rate limits
         }
 
         # Check if model is Claude 3 (supported by SDK) or legacy (requires manual HTTP)
@@ -66,28 +97,306 @@ class AnthropicModelProvider(BaseModelProvider):
         # Validate model on initialization
         self.validate_model()
 
+    async def _retry_with_backoff(
+        self, func, *args, max_retries: Optional[int] = None, **kwargs
+    ) -> Any:
+        """
+        Retry a function with exponential backoff and intelligent rate limit handling.
+
+        Args:
+            func: The function to retry
+            *args: Positional arguments for the function
+            max_retries: Maximum retry attempts (defaults to self.rate_limit_config["max_retries"])
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            The result of the function call
+
+        Raises:
+            Exception: If all retries are exhausted
+        """
+        max_retries = max_retries or self.rate_limit_config["max_retries"]
+
+        for attempt in range(
+            max_retries + 1
+        ):  # +1 because first attempt is not a retry
+            try:
+                result = func(*args, **kwargs)
+                # Handle both sync and async functions
+                if asyncio.iscoroutine(result):
+                    return await result
+                else:
+                    return result
+
+            except RateLimitError as e:
+                if attempt == max_retries:
+                    # Log final failure
+                    if (
+                        self.context
+                        and hasattr(self.context, "agent_logger")
+                        and self.context.agent_logger
+                    ):
+                        self.context.agent_logger.error(
+                            f"Anthropic rate limit exceeded after {max_retries} retries: {e}"
+                        )
+                    raise e
+
+                # Parse rate limit information from error
+                retry_delay = self._parse_rate_limit_delay(e)
+
+                # Calculate backoff delay with exponential increase and jitter
+                backoff_delay = self._calculate_backoff_delay(attempt, retry_delay)
+
+                # Log retry attempt
+                if (
+                    self.context
+                    and hasattr(self.context, "agent_logger")
+                    and self.context.agent_logger
+                ):
+                    self.context.agent_logger.warning(
+                        f"Anthropic rate limit hit, retrying in {backoff_delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries + 1})"
+                    )
+
+                # Wait before retry
+                await asyncio.sleep(backoff_delay)
+
+            except APITimeoutError as e:
+                if attempt == max_retries:
+                    raise e
+
+                # For timeouts, use shorter backoff
+                backoff_delay = self._calculate_backoff_delay(
+                    attempt, 5.0
+                )  # 5 second base
+
+                if (
+                    self.context
+                    and hasattr(self.context, "agent_logger")
+                    and self.context.agent_logger
+                ):
+                    self.context.agent_logger.warning(
+                        f"Anthropic timeout, retrying in {backoff_delay:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries + 1})"
+                    )
+
+                await asyncio.sleep(backoff_delay)
+
+            except Exception as e:
+                # Non-retryable errors should not be retried
+                raise e
+
+    def _parse_rate_limit_delay(self, rate_limit_error: RateLimitError) -> float:
+        """
+        Parse retry delay information from Anthropic rate limit error.
+
+        Args:
+            rate_limit_error: The RateLimitError exception
+
+        Returns:
+            Suggested retry delay in seconds
+        """
+        error_str = str(rate_limit_error)
+
+        # Look for common retry delay patterns in error messages
+        retry_patterns = [
+            r"retry after (\d+) seconds?",
+            r"retry in (\d+) seconds?",
+            r"wait (\d+) seconds?",
+            r"rate limit.*?(\d+)s",
+        ]
+
+        import re
+
+        for pattern in retry_patterns:
+            match = re.search(pattern, error_str.lower())
+            if match:
+                try:
+                    delay = int(match.group(1))
+                    return float(delay)
+                except (ValueError, IndexError):
+                    continue
+
+        # Default to configured rate limit retry delay
+        return self.rate_limit_config["rate_limit_retry_delay"]
+
+    def _calculate_backoff_delay(self, attempt: int, base_delay: float) -> float:
+        """
+        Calculate exponential backoff delay with jitter.
+
+        Args:
+            attempt: Current attempt number (0-based)
+            base_delay: Base delay in seconds
+
+        Returns:
+            Calculated delay in seconds
+        """
+        # Exponential backoff: base_delay * 2^attempt
+        exponential_delay = base_delay * (2**attempt)
+
+        # Cap at maximum delay
+        capped_delay = min(exponential_delay, self.rate_limit_config["max_delay"])
+
+        # Add jitter to prevent thundering herd
+        jitter_range = capped_delay * self.rate_limit_config["jitter_factor"]
+        jitter = random.uniform(-jitter_range, jitter_range)
+
+        final_delay = max(0.1, capped_delay + jitter)  # Minimum 0.1 seconds
+
+        return final_delay
+
+    def _should_retry_error(self, error: Exception) -> bool:
+        """
+        Determine if an error should trigger a retry.
+
+        Args:
+            error: The exception that occurred
+
+        Returns:
+            True if the error should trigger a retry, False otherwise
+        """
+        # Always retry rate limits and timeouts
+        if isinstance(error, (RateLimitError, APITimeoutError)):
+            return True
+
+        # Retry network-related errors
+        if isinstance(error, (ConnectionError, OSError)):
+            return True
+
+        # Don't retry validation or authentication errors
+        if isinstance(error, (ValueError, KeyError, TypeError)):
+            return False
+
+        # Don't retry API errors that aren't rate limits or timeouts
+        if isinstance(error, APIError):
+            return False
+
+        # Default to not retrying unknown errors
+        return False
+
+    def get_rate_limit_status(self) -> Dict[str, Any]:
+        """
+        Get current rate limiting configuration and status.
+
+        Returns:
+            Dictionary with rate limiting information
+        """
+        return {
+            "provider": "anthropic",
+            "model": self.model,
+            "rate_limit_config": self.rate_limit_config.copy(),
+            "supports_retry": True,
+            "retry_strategy": "exponential_backoff_with_jitter",
+            "max_retry_delay": f"{self.rate_limit_config['max_delay']}s",
+            "jitter_enabled": True,
+        }
+
+    def update_rate_limit_config(self, **kwargs) -> None:
+        """
+        Update rate limiting configuration.
+
+        Args:
+            **kwargs: Configuration updates (max_retries, base_delay, max_delay, etc.)
+        """
+        for key, value in kwargs.items():
+            if key in self.rate_limit_config:
+                self.rate_limit_config[key] = value
+
+        if (
+            self.context
+            and hasattr(self.context, "agent_logger")
+            and self.context.agent_logger
+        ):
+            self.context.agent_logger.info(
+                f"Updated Anthropic rate limit config: {kwargs}"
+            )
+
+    def get_native_params(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert OpenAI-style parameters to Anthropic-native parameters.
+
+        Maps OpenAI parameter names to Anthropic's expected parameter names
+        based on the official Anthropic API documentation.
+
+        Args:
+            options: OpenAI-style configuration options
+
+        Returns:
+            Dictionary with Anthropic-native parameter names and values
+        """
+        native_params = {}
+
+        # OpenAI -> Anthropic parameter mappings
+        param_mapping = {
+            "temperature": "temperature",  # Direct mapping
+            "max_tokens": "max_tokens",  # Direct mapping
+            "top_p": "top_p",  # Direct mapping
+            "stream": "stream",  # Direct mapping
+            "stop": "stop_sequences",  # OpenAI stop -> Anthropic stop_sequences
+        }
+
+        for openai_param, anthropic_param in param_mapping.items():
+            if openai_param in options:
+                native_params[anthropic_param] = options[openai_param]
+
+        # Handle stop sequences specifically (can be string or list)
+        if "stop_sequences" in options:
+            native_params["stop_sequences"] = options["stop_sequences"]
+
+        # Anthropic-specific parameters that don't have OpenAI equivalents
+        # These will be passed through if present in options
+        anthropic_specific = {
+            "top_k": int,  # Anthropic-specific sampling parameter
+            "system": str,  # System message (handled separately in API calls)
+            "tools": list,  # Tool definitions (handled separately)
+            "tool_choice": dict,  # Tool choice preference (handled separately)
+        }
+
+        for param, expected_type in anthropic_specific.items():
+            if param in options:
+                try:
+                    if expected_type == int:
+                        native_params[param] = int(options[param])
+                    elif expected_type == str:
+                        native_params[param] = str(options[param])
+                    else:
+                        native_params[param] = options[param]
+                except (ValueError, TypeError):
+                    # Skip invalid parameters
+                    continue
+
+        # Note: Anthropic doesn't support frequency_penalty, presence_penalty, seed, or n
+        # These OpenAI parameters will be filtered out
+
+        return native_params
+
     def _is_claude_3_model(self, model: str) -> bool:
         """Check if the model is Claude 3+ (supported by modern messages API)."""
         # Legacy models that require the old completion API
         legacy_model_prefixes = ["claude-1", "claude-2"]
-        
+
         # Check if it's a legacy model
         for prefix in legacy_model_prefixes:
             if model.startswith(prefix):
                 return False
-        
+
         # All Claude 3+ models (including aliases) use the modern messages API
         # This includes:
         # - claude-3-5-sonnet-latest (alias for claude-3-5-sonnet-20241022)
-        # - claude-3-7-sonnet-latest (alias for claude-3-7-sonnet-20250219)  
+        # - claude-3-7-sonnet-latest (alias for claude-3-7-sonnet-20250219)
         # - claude-sonnet-4-0 (alias for claude-sonnet-4-20250514)
         # - claude-opus-4-0 (alias for claude-opus-4-20250514)
-        modern_model_prefixes = ["claude-3", "claude-4", "claude-sonnet-4", "claude-opus-4"]
-        
+        modern_model_prefixes = [
+            "claude-3",
+            "claude-4",
+            "claude-sonnet-4",
+            "claude-opus-4",
+        ]
+
         for prefix in modern_model_prefixes:
             if model.startswith(prefix):
                 return True
-                
+
         # Default to modern API for unknown models (safer assumption)
         return True
 
@@ -97,11 +406,8 @@ class AnthropicModelProvider(BaseModelProvider):
         if msg.get("role") == "tool":
             # Convert tool results to user message with tool result content
             tool_result = msg.get("content", "")
-            return {
-                "role": "user",
-                "content": f"Tool result: {tool_result}".rstrip()
-            }
-        
+            return {"role": "user", "content": f"Tool result: {tool_result}".rstrip()}
+
         allowed = {"role", "content"}
         cleaned = {k: v for k, v in msg.items() if k in allowed}
 
@@ -110,7 +416,7 @@ class AnthropicModelProvider(BaseModelProvider):
             cleaned["role"] = "user"
         if "content" not in cleaned:
             cleaned["content"] = ""
-        
+
         # Strip trailing whitespace from content to avoid Anthropic API errors
         if isinstance(cleaned["content"], str):
             cleaned["content"] = cleaned["content"].rstrip()
@@ -120,7 +426,7 @@ class AnthropicModelProvider(BaseModelProvider):
     def _convert_tools_to_anthropic_format(self, tools: List[dict]) -> List[dict]:
         """Convert tools from OpenAI format to Anthropic format."""
         converted_tools = []
-        
+
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 # Convert from OpenAI format to Anthropic format
@@ -129,17 +435,16 @@ class AnthropicModelProvider(BaseModelProvider):
                     "type": "custom",
                     "name": func_def["name"],
                     "description": func_def.get("description", ""),
-                    "input_schema": func_def.get("parameters", {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    })
+                    "input_schema": func_def.get(
+                        "parameters",
+                        {"type": "object", "properties": {}, "required": []},
+                    ),
                 }
                 converted_tools.append(converted_tool)
             else:
                 # Tool is already in the correct format or unknown format
                 converted_tools.append(tool)
-        
+
         return converted_tools
 
     def _extract_system_message(
@@ -160,37 +465,172 @@ class AnthropicModelProvider(BaseModelProvider):
     def validate_model(self, **kwargs) -> dict:
         """Validate that the model is supported by Anthropic."""
         try:
-            if not self.is_claude_3:
-                # For legacy models, we'll accept them but note they need manual HTTP
-                return {
-                    "valid": True,
-                    "model": self.model,
-                    "warning": "Legacy model - requires manual HTTP implementation",
-                }
+            # Try to get available models from Anthropic API
+            available_models = []
+            try:
+                # Use the client to list available models
+                models_response = self.client.models.list()
+                available_models = [model.id for model in models_response.data]
+            except Exception as api_error:
+                # If API call fails, fall back to basic validation
+                if not self.is_claude_3:
+                    return {
+                        "valid": True,
+                        "model": self.model,
+                        "warning": f"Legacy model - requires manual HTTP implementation. Could not verify: {api_error}",
+                    }
+                else:
+                    # Basic format check as fallback
+                    if any(
+                        prefix in self.model.lower()
+                        for prefix in [
+                            "claude-3",
+                            "claude-4",
+                            "claude-sonnet-4",
+                            "claude-opus-4",
+                        ]
+                    ):
+                        return {
+                            "valid": True,
+                            "model": self.model,
+                            "warning": f"Could not verify model with API ({api_error}), but format appears valid",
+                        }
+                    else:
+                        raise ValueError(
+                            f"Could not validate model '{self.model}' - API unavailable and unknown format"
+                        )
 
-            # For Claude 3, we can't easily list models without making a request
-            # So we'll just validate the model name format
-            if "claude-3" in self.model.lower():
-                return {"valid": True, "model": self.model}
-            else:
+            # Check if model is in the available list
+            if self.model in available_models:
+                if not self.is_claude_3:
+                    return {
+                        "valid": True,
+                        "model": self.model,
+                        "warning": "Legacy model - requires manual HTTP implementation",
+                    }
+                else:
+                    return {"valid": True, "model": self.model}
+
+            # If not found directly, try to validate by making a test API call
+            # This handles aliases and new models dynamically
+            try:
+                # Make a minimal test request to validate the model exists
+                self.client.messages.create(
+                    model=self.model,
+                    max_tokens=1,
+                    messages=[{"role": "user", "content": "test"}],
+                )
+                # If we get here, the model is valid
+                if not self.is_claude_3:
+                    return {
+                        "valid": True,
+                        "model": self.model,
+                        "warning": "Legacy model - requires manual HTTP implementation (validated via API test)",
+                    }
+                else:
+                    return {
+                        "valid": True,
+                        "model": self.model,
+                        "note": "Model validated via API test (not in models list - may be alias or new model)",
+                    }
+            except Exception as test_error:
+                # If test call fails, the model is truly invalid
                 raise ValueError(
-                    f"Model '{self.model}' is not a supported Claude 3 model"
+                    f"Model '{self.model}' is not available from Anthropic. "
+                    f"Available models: {', '.join(available_models[:10])}{'...' if len(available_models) > 10 else ''}. "
+                    f"API test failed: {str(test_error)}"
                 )
 
         except Exception as e:
             self._handle_error(e, "validation")
             return {"valid": False, "error": str(e)}
 
-    async def get_chat_completion(
+    def _supports_native_tool_calling(self, model: str) -> bool:
+        """
+        Check if the Anthropic model supports native tool calling.
+
+        Most modern Claude models support tool calling, but older versions may not.
+
+        Args:
+            model: Optional model name to check (defaults to self.model)
+
+        Returns:
+            True if model supports native tool calling, False otherwise
+        """
+        model_to_check = model or self.model
+
+        # Models known to NOT support tool calling
+        non_tool_calling_models = {
+            "claude-instant-1",  # Legacy model
+            "claude-1",  # Legacy model
+            "claude-1.3",  # Legacy model
+            "claude-2.0",  # Older model without tools
+        }
+
+        # Check if model is in non-tool-calling list
+        return model_to_check not in non_tool_calling_models
+
+    async def _execute_structured_chat_completion(
         self,
+        response_model: Type[BaseModel],
         messages: List[dict],
-        stream: bool = False,
-        tools: Optional[List[dict]] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
         options: Optional[Dict[str, Any]] = None,
-        format: str = "",
         **kwargs,
-    ) -> Union[CompletionResponse, Any]:
+    ) -> BaseModel:
+        """
+        Execute structured chat completion using Instructor for Anthropic.
+
+        Args:
+            response_model: The Pydantic model class
+            messages: List of message dictionaries
+            options: Provider-specific options
+            **kwargs: Additional arguments
+
+        Returns:
+            An instance of the response_model
+        """
+        if not self.instructor_client:
+            raise RuntimeError(
+                "Instructor client not initialized for Anthropic provider"
+            )
+
+        try:
+            # Extract system message and clean messages
+            system_message, cleaned_messages = self._extract_system_message(messages)
+            cleaned_messages = [self._clean_message(msg) for msg in cleaned_messages]
+
+            # Merge options
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Get OpenAI-style parameters for Instructor (filters out Anthropic-specific params)
+            openai_params = self.get_openai_params(merged_options)
+
+            # Prepare API call parameters for instructor
+            api_params = {
+                "model": self.model,
+                "messages": cleaned_messages,
+                "response_model": response_model,
+                **openai_params,
+            }
+
+            # Add system message if present
+            if system_message:
+                api_params["system"] = system_message
+
+            # Use instructor client for structured response with retry logic
+            structured_response = await self._retry_with_backoff(
+                lambda: self._call_instructor_client(
+                    "chat.completions.create", **api_params
+                )
+            )
+
+            return structured_response
+
+        except Exception as e:
+            self._handle_error(e, "structured_chat_completion")
+            raise Exception(f"Anthropic Structured Chat Completion Error: {str(e)}")
+
+    async def _get_provider_chat_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a chat completion from Anthropic.
 
@@ -203,16 +643,16 @@ class AnthropicModelProvider(BaseModelProvider):
             format: Response format ("json" or "")
             **kwargs: Additional arguments
         """
+        messages = kwargs.get("messages", [])
+        stream = kwargs.get("stream", False)
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             if not self.is_claude_3:
-                return await self._get_legacy_completion(
-                    messages=messages,
-                    stream=stream,
-                    tools=tools,
-                    options=options,
-                    format=format,
-                    **kwargs,
-                )
+                return await self._get_legacy_completion(**kwargs)
 
             # Extract system message and clean messages
             system_message, cleaned_messages = self._extract_system_message(messages)
@@ -221,12 +661,14 @@ class AnthropicModelProvider(BaseModelProvider):
             # Merge options
             merged_options = {**self.default_options, **(options or {})}
 
+            # Convert OpenAI-style parameters to Anthropic-native format
+            native_options = self.get_native_params(merged_options)
+
             # Prepare API call parameters
             api_params = {
                 "model": self.model,
                 "messages": cleaned_messages,
-                "stream": stream,
-                **merged_options,
+                **native_options,
             }
 
             # Add system message if present
@@ -239,7 +681,7 @@ class AnthropicModelProvider(BaseModelProvider):
                 if tool_choice and tool_choice != "auto":
                     api_params["tool_choice"] = tool_choice
 
-            # Handle JSON format for Claude 3 models
+            # Handle JSON format for Claude 3 models (structured outputs handled by base class)
             if format == "json":
                 # Add JSON instruction to the last user message
                 if cleaned_messages and cleaned_messages[-1].get("role") == "user":
@@ -248,13 +690,15 @@ class AnthropicModelProvider(BaseModelProvider):
                     ] += "\n\nPlease respond in valid JSON format."
                 elif system_message:
                     system_message += "\n\nAlways respond in valid JSON format."
+                    api_params["system"] = system_message
                 else:
                     # Add system message if not present
                     api_params["system"] = "Always respond in valid JSON format."
 
-            # Create completion
-            completion = self.client.messages.create(**api_params)
-
+            # Create completion with retry logic
+            completion = await self._retry_with_backoff(
+                lambda: self.client.messages.create(**api_params)
+            )
             if stream:
                 return completion  # Return stream object directly
 
@@ -301,11 +745,19 @@ class AnthropicModelProvider(BaseModelProvider):
             )
 
         except RateLimitError as e:
-            self._handle_error(e, "chat_completion")
-            raise Exception(f"Anthropic Rate Limit Error: {str(e)}")
+            if self._should_retry_error(e):
+                # Let the retry logic handle it
+                raise e
+            else:
+                self._handle_error(e, "chat_completion")
+                raise Exception(f"Anthropic Rate Limit Error: {str(e)}")
         except APITimeoutError as e:
-            self._handle_error(e, "chat_completion")
-            raise Exception(f"Anthropic API Timeout Error: {str(e)}")
+            if self._should_retry_error(e):
+                # Let the retry logic handle it
+                raise e
+            else:
+                self._handle_error(e, "chat_completion")
+                raise Exception(f"Anthropic API Timeout Error: {str(e)}")
         except APIError as e:
             self._handle_error(e, "chat_completion")
             raise Exception(f"Anthropic API Error: {str(e)}")
@@ -313,20 +765,17 @@ class AnthropicModelProvider(BaseModelProvider):
             self._handle_error(e, "chat_completion")
             raise Exception(f"Anthropic Chat Completion Error: {str(e)}")
 
-    async def _get_legacy_completion(
-        self,
-        messages: List[dict],
-        stream: bool = False,
-        tools: Optional[List[dict]] = None,
-        options: Optional[Dict[str, Any]] = None,
-        format: str = "",
-        **kwargs,
-    ) -> CompletionResponse:
+    async def _get_legacy_completion(self, **kwargs) -> CompletionResponse:
         """
         Get completion for legacy Claude models using manual HTTP requests.
 
         This is a fallback for Claude 1/2 models that aren't supported by the SDK.
         """
+        messages = kwargs.get("messages", [])
+        stream = kwargs.get("stream", False)
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             # Convert messages to legacy prompt format
             prompt = self._convert_messages_to_legacy_prompt(messages)
@@ -341,13 +790,20 @@ class AnthropicModelProvider(BaseModelProvider):
 
             merged_options = {**self.default_options, **(options or {})}
 
+            # Convert OpenAI-style parameters to Anthropic-native format
+            native_options = self.get_native_params(merged_options)
+
             data = {
                 "model": self.model,
                 "prompt": prompt,
-                "max_tokens_to_sample": merged_options.get("max_tokens", 1000),
-                "temperature": merged_options.get("temperature", 0.7),
-                "stream": stream,
+                "max_tokens_to_sample": native_options.get("max_tokens", 1000),
+                "temperature": native_options.get("temperature", 0.7),
+                "stream": native_options.get("stream", stream),
             }
+
+            # Add stop sequences if present
+            if "stop_sequences" in native_options:
+                data["stop_sequences"] = native_options["stop_sequences"]
 
             # Handle JSON format for legacy models
             if format == "json":
@@ -408,14 +864,7 @@ class AnthropicModelProvider(BaseModelProvider):
 
         return prompt
 
-    async def get_completion(
-        self,
-        prompt: str,
-        system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-        format: str = "",
-        **kwargs,
-    ) -> CompletionResponse:
+    async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a text completion from Anthropic using the chat completions API.
 
@@ -426,6 +875,11 @@ class AnthropicModelProvider(BaseModelProvider):
             format: Response format ("json" or "")
             **kwargs: Additional arguments
         """
+        prompt = kwargs.get("prompt", "")
+        system = kwargs.get("system")
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             # Build messages
             messages = []
@@ -434,8 +888,14 @@ class AnthropicModelProvider(BaseModelProvider):
             messages.append({"role": "user", "content": prompt})
 
             # Use chat completion for text completion
-            return await self.get_chat_completion(
-                messages=messages, options=options, format=format, **kwargs
+            # Remove conflicting parameters from kwargs to avoid "multiple values" error
+            filtered_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["messages", "options", "format"]
+            }
+            return await self._get_provider_chat_completion(
+                messages=messages, options=options, format=format, **filtered_kwargs
             )
 
         except Exception as e:

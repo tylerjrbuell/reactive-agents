@@ -1,4 +1,5 @@
 from __future__ import annotations
+import time
 from typing import List, Dict, Any, Optional, Union, Callable, TYPE_CHECKING
 from enum import Enum
 from dataclasses import dataclass, field
@@ -689,3 +690,325 @@ class ContextManager:
                 seen_indices.add(idx)
 
         return context
+
+    def get_tool_calling_context(self, max_tool_summaries: int = 8) -> Dict[str, Any]:
+        """
+        Get optimized context for tool calling scenarios focused on tool execution history.
+
+        Args:
+            max_tool_summaries: Maximum number of recent tool summaries to include
+
+        Returns:
+            Dictionary containing optimized context for tool calling
+        """
+        # Get tool summaries from reasoning_log and task_progress
+        tool_summaries = self._extract_tool_summaries(max_tool_summaries)
+
+        # Extract current objective from the last user message
+        current_objective = self._extract_current_objective()
+
+        # Build focused context summary for tool calling
+        context_summary = self._build_tool_focused_summary(
+            tool_summaries, current_objective
+        )
+
+        return {
+            "current_objective": current_objective,
+            "tool_summaries": tool_summaries,
+            "context_summary": context_summary,
+            "available_context_tokens": self._estimate_available_tokens(),
+        }
+
+    def _extract_tool_summaries(self, max_summaries: int) -> List[Dict[str, Any]]:
+        """
+        Extract tool summaries from session logs, focusing on tool execution results.
+
+        Args:
+            max_summaries: Maximum number of summaries to extract
+
+        Returns:
+            List of structured tool summary data
+        """
+        tool_summaries = []
+
+        # Get tool summaries from reasoning_log and task_progress
+        all_entries = (
+            self.agent_context.session.reasoning_log
+            + self.agent_context.session.task_progress
+        )
+
+        # Filter for tool summaries and extract data
+        for entry in reversed(all_entries):  # Most recent first
+            if isinstance(entry, str) and "[TOOL SUMMARY]" in entry:
+                # Parse tool summary for structured data
+                tool_data = self._parse_tool_summary(entry)
+                if tool_data:
+                    tool_summaries.append(tool_data)
+
+                if len(tool_summaries) >= max_summaries:
+                    break
+
+        return tool_summaries
+
+    def _parse_tool_summary(self, summary: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse a tool summary string to extract structured data.
+        
+        Args:
+            summary: Tool summary string
+            
+        Returns:
+            Structured tool data or None if parsing fails
+        """
+        try:
+            # Remove the [TOOL SUMMARY] prefix
+            content = summary.replace("[TOOL SUMMARY]", "").strip()
+            
+            # Extract tool name (look for patterns like "Used tool_name with" or "Executed tool_name")
+            tool_name = "unknown"
+            if "Used the " in content:
+                # Pattern: "Used the tool_name with parameters"
+                start = content.find("Used the ") + 9
+                if " with " in content[start:]:
+                    end = content.find(" with ", start)
+                    tool_name = content[start:end].strip()
+            elif "Used " in content and " with " in content:
+                # Pattern: "Used tool_name with parameters"
+                start = content.find("Used ") + 5
+                end = content.find(" with ", start)
+                if end > start:
+                    tool_name = content[start:end].strip()
+            
+            # Extract key data from the summary
+            extracted_data = {}
+            
+            # Look for common data patterns in tool results
+            if "id" in content.lower():
+                # Extract IDs (message IDs, user IDs, etc.)
+                import re
+                id_matches = re.findall(r'["\']([a-f0-9]{10,})["\']', content)
+                if id_matches:
+                    extracted_data["ids"] = id_matches
+            
+            if "status" in content.lower():
+                # Extract status information
+                import re
+                status_matches = re.findall(r'status["\s]*[:\s]*["\s]*(\w+)', content, re.IGNORECASE)
+                if status_matches:
+                    extracted_data["status"] = status_matches[0]
+            
+            if "count" in content.lower():
+                # Extract count information
+                import re
+                count_matches = re.findall(r'count["\s]*[:\s]*["\s]*(\d+)', content, re.IGNORECASE)
+                if count_matches:
+                    extracted_data["count"] = int(count_matches[0])
+            
+            # Extract error context for better decision making
+            error_context = None
+            if "error" in content.lower():
+                # Extract specific error messages
+                if "not authenticated" in content.lower():
+                    error_context = "authentication_required"
+                    extracted_data["required_action"] = "authenticate"
+                elif "401" in content:
+                    error_context = "authentication_required"
+                    extracted_data["required_action"] = "authenticate"
+                elif "403" in content:
+                    error_context = "permission_denied"
+                elif "404" in content:
+                    error_context = "not_found"
+                elif "timeout" in content.lower():
+                    error_context = "timeout"
+                else:
+                    error_context = "general_error"
+            
+            # Extract success/failure indicators
+            success_indicators = ["success", "sent", "created", "completed", "found"]
+            failure_indicators = ["error", "failed", "denied", "invalid"]
+            
+            content_lower = content.lower()
+            is_successful = any(indicator in content_lower for indicator in success_indicators)
+            is_failed = any(indicator in content_lower for indicator in failure_indicators)
+            
+            return {
+                "tool_name": tool_name,
+                "summary": content[:200],  # First 200 chars for brevity
+                "extracted_data": extracted_data,
+                "error_context": error_context,
+                "is_successful": is_successful and not is_failed,
+                "is_failed": is_failed,
+                "timestamp": time.time()
+            }
+            
+        except Exception as e:
+            if self.agent_context.agent_logger:
+                self.agent_context.agent_logger.debug(f"Failed to parse tool summary: {e}")
+            return None
+
+    def _build_tool_focused_summary(
+        self, tool_summaries: List[Dict[str, Any]], objective: str
+    ) -> str:
+        """
+        Build a concise summary focused on tool execution results.
+        
+        Args:
+            tool_summaries: List of tool summary data
+            objective: Current objective
+            
+        Returns:
+            Focused context summary string
+        """
+        if not tool_summaries:
+            return f"Objective: {objective}"
+        
+        summary_parts = [f"Objective: {objective}"]
+        
+        # Count successful and failed tools
+        successful_tools = [t for t in tool_summaries if t.get("is_successful")]
+        failed_tools = [t for t in tool_summaries if t.get("is_failed")]
+        
+        summary_parts.append(f"Tools: {len(successful_tools)} ✅ / {len(failed_tools)} ❌")
+        
+        # Show critical issues (generic)
+        if failed_tools:
+            error_types = set(t.get("error_context", "error") for t in failed_tools)
+            required_actions = set()
+            for t in failed_tools:
+                action = t.get("extracted_data", {}).get("required_action")
+                if action:
+                    required_actions.add(action)
+            
+            if required_actions:
+                summary_parts.append(f"⚠️ Required: {', '.join(required_actions)}")
+            elif error_types:
+                summary_parts.append(f"⚠️ Issues: {', '.join(error_types)}")
+        
+        # Show available data from successful tools
+        if successful_tools:
+            data_available = []
+            for tool in successful_tools[-2:]:  # Last 2 successful
+                extracted = tool.get("extracted_data", {})
+                if extracted.get("ids"):
+                    data_available.append(f"{len(extracted['ids'])} ID(s)")
+                elif extracted.get("status"):
+                    data_available.append(f"status: {extracted['status']}")
+                elif extracted.get("count"):
+                    data_available.append(f"count: {extracted['count']}")
+            
+            if data_available:
+                summary_parts.append(f"Data: {', '.join(data_available)}")
+        
+        return " | ".join(summary_parts)
+
+    def _extract_current_objective(self) -> str:
+        """
+        Extract the current objective from conversation flow.
+
+        Returns:
+            Current objective as a string
+        """
+        # Look for the most recent user request or task
+        for message in reversed(self.messages):
+            if message.get("role") == "user":
+                content = message.get("content", "")
+                if content.strip():
+                    return content.strip()
+
+        return "Complete the user's request"
+
+    def _build_tool_context_summary(
+        self,
+        recent_messages: List[Dict[str, Any]],
+        tool_results: List[Dict[str, Any]],
+        objective: str,
+    ) -> str:
+        """
+        Build a concise summary of the context for tool calling.
+
+        Args:
+            recent_messages: Recent conversation messages
+            tool_results: Recent tool execution results
+            objective: Current objective
+
+        Returns:
+            Context summary string
+        """
+        summary_parts = [f"Current objective: {objective}"]
+
+        if tool_results:
+            summary_parts.append(
+                f"Recent tool executions: {len(tool_results)} results available"
+            )
+
+            # Summarize recent tool results
+            for result in tool_results[-3:]:  # Last 3 tool results
+                tool_name = result.get("metadata", {}).get("tool_name", "unknown_tool")
+                result_summary = (
+                    str(result.get("content", ""))[:100] + "..."
+                    if len(str(result.get("content", ""))) > 100
+                    else str(result.get("content", ""))
+                )
+                summary_parts.append(f"- {tool_name}: {result_summary}")
+
+        # Add conversation context
+        user_messages = [m for m in recent_messages if m.get("role") == "user"]
+        if len(user_messages) > 1:
+            summary_parts.append(
+                f"Conversation has {len(user_messages)} user interactions"
+            )
+
+        return " | ".join(summary_parts)
+
+    def _estimate_available_tokens(self) -> int:
+        """
+        Estimate available tokens for tool calling context.
+
+        Returns:
+            Estimated available tokens
+        """
+        current_tokens = self.estimate_context_tokens()
+        max_tokens = self.get_optimal_pruning_config().get("max_tokens", 8000)
+
+        # Reserve some tokens for the tool calling prompt and response
+        reserved_tokens = max_tokens * 0.3  # 30% reserved
+        available = max(0, max_tokens - current_tokens - reserved_tokens)
+
+        return int(available)
+
+    def add_tool_preservation_rules(self) -> None:
+        """
+        Add preservation rules specific to tool calling scenarios.
+        """
+
+        def preserve_tool_calls(message: Dict[str, Any]) -> bool:
+            """Preserve messages with tool calls."""
+            return "tool_calls" in message or message.get("role") == "tool"
+
+        def preserve_tool_results(message: Dict[str, Any]) -> bool:
+            """Preserve recent tool results."""
+            metadata = message.get("metadata", {})
+            return metadata.get("is_tool_result") or metadata.get("tool_name")
+
+        def preserve_user_requests(message: Dict[str, Any]) -> bool:
+            """Preserve user requests that might contain task context."""
+            if message.get("role") == "user":
+                content = message.get("content", "").lower()
+                # Preserve if it looks like a task or question
+                task_indicators = [
+                    "can you",
+                    "please",
+                    "help",
+                    "need",
+                    "want",
+                    "how",
+                    "what",
+                    "?",
+                ]
+                return any(indicator in content for indicator in task_indicators)
+            return False
+
+        # Add the preservation rules
+        self.add_preservation_rule(preserve_tool_calls)
+        self.add_preservation_rule(preserve_tool_results)
+        self.add_preservation_rule(preserve_user_requests)

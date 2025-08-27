@@ -494,6 +494,191 @@ Reactive Agents works with all major LLM providers:
 
 ---
 
+## 🎯 Structured Outputs & Provider Architecture
+
+### 🔄 Universal Structured Output System
+
+Reactive Agents implements a **unified structured output system** using the [Instructor Python Package](https://python.useinstructor.com/) across all model providers. This ensures consistent **Pydantic model validation** and **type safety** regardless of your LLM choice.
+
+```python
+from pydantic import BaseModel
+from typing import List
+from reactive_agents import ReactiveAgentBuilder
+
+class ResearchResult(BaseModel):
+    summary: str
+    key_findings: List[str]
+    confidence_score: float
+    sources: List[str]
+
+# Works identically across ALL providers
+agent = await ReactiveAgentBuilder()\
+    .with_model("ollama:qwen2:7b")  # or any provider
+    .build()
+
+# Get validated, structured output
+result: ResearchResult = await agent.get_structured_response(
+    ResearchResult,
+    "Research the latest AI developments"
+)
+
+print(result.summary)           # ✅ Type-safe string
+print(result.confidence_score)  # ✅ Type-safe float
+```
+
+### 🔧 OpenAI-Style Parameter Interface
+
+The framework uses **OpenAI-compatible parameters** as the standard interface, with automatic translation to provider-specific formats:
+
+```python
+# ✅ Same parameters work everywhere
+universal_options = {
+    "temperature": 0.2,
+    "max_tokens": 500,
+    "top_p": 0.9,
+    "frequency_penalty": 0.1,
+    "presence_penalty": 0.05,
+    "stop": ["END", "STOP"],
+    "seed": 42
+}
+
+# Automatically optimized for each provider
+providers = [
+    "openai:gpt-4o",
+    "anthropic:claude-3-5-sonnet-latest", 
+    "groq:llama-3.1-8b-instant",
+    "ollama:cogito:14b",
+    "google:gemini-2.5-flash"
+]
+
+for provider_model in providers:
+    agent = await ReactiveAgentBuilder()\
+        .with_model(provider_model)\
+        .with_model_provider_options(universal_options)\
+        .build()
+    
+    # Same code, provider-specific optimization! 🚀
+    result = await agent.run("Analyze this data...")
+```
+
+### 🔄 Dual-Parameter Architecture
+
+The framework uses an elegant **dual-parameter system**:
+
+#### 1️⃣ **User Interface Layer** (OpenAI-style)
+```python
+# Clean, standardized interface
+{
+    "temperature": 0.3,
+    "max_tokens": 200,
+    "top_p": 0.8,
+    "frequency_penalty": 0.1
+}
+```
+
+#### 2️⃣ **Provider Optimization Layer** (Native formats)
+```python
+# Ollama native (automatically translated)
+{
+    "temperature": 0.3,
+    "num_predict": 200,      # max_tokens → num_predict
+    "top_p": 0.8,
+    "repeat_penalty": 1.1,   # frequency_penalty → repeat_penalty (scaled)
+    "num_ctx": 4096,         # Added Ollama optimizations
+    "repeat_last_n": 64,
+    "top_k": 40
+}
+
+# Anthropic native (automatically translated)
+{
+    "temperature": 0.3,
+    "max_tokens": 200,       # Direct mapping
+    "top_p": 0.8,
+    "stop_sequences": ["END"] # stop → stop_sequences
+}
+
+# Groq native (automatically translated)
+{
+    "temperature": 0.3,
+    "max_completion_tokens": 200,  # max_tokens → max_completion_tokens
+    "top_p": 0.8,
+    "frequency_penalty": 0.1       # Direct OpenAI compatibility
+}
+
+# Google native (automatically translated)
+{
+    "temperature": 0.3,
+    "max_output_tokens": 200,      # max_tokens → max_output_tokens
+    "top_p": 0.8,
+    "stop_sequences": ["END"],     # stop → stop_sequences (up to 5)
+    "top_k": 40                    # Google-specific optimization
+}
+```
+
+### ✨ Key Benefits
+
+| Feature | Benefit |
+|---------|---------|
+| 🔄 **Universal Interface** | Same parameters across all providers |
+| 🎯 **Type Safety** | Full Pydantic validation for structured outputs |
+| ⚡ **Performance** | Provider-specific optimizations automatically applied |
+| 🛡️ **Reliability** | Graceful fallback when structured outputs fail |
+| 🔧 **Maintainable** | Clean separation between user interface and implementation |
+| 🚀 **Future-Proof** | Easy to add new providers following established patterns |
+
+### 🧪 Testing Your Provider Setup
+
+```bash
+# Test parameter mapping
+python -c "
+from reactive_agents.providers.llm.ollama import OllamaModelProvider
+provider = OllamaModelProvider('cogito:14b')
+options = {'temperature': 0.2, 'max_tokens': 100}
+print('OpenAI params:', provider.get_openai_params(options))
+print('Native params:', provider.get_native_params(options))
+"
+
+# Integration testing across providers
+python -m reactive_agents.tests.integration.diagnose_provider_issues
+```
+
+### 🎨 Advanced Usage
+
+```python
+# Provider-specific optimizations while maintaining compatibility
+builder = ReactiveAgentBuilder()
+
+# Ollama with GPU acceleration
+if provider == "ollama":
+    builder.with_model_provider_options({
+        "temperature": 0.2,
+        "max_tokens": 1000,
+        "num_gpu": 256,      # Ollama-specific: GPU layers
+        "num_ctx": 8192,     # Ollama-specific: context window
+    })
+
+# Anthropic with advanced parameters  
+elif provider == "anthropic":
+    builder.with_model_provider_options({
+        "temperature": 0.2,
+        "max_tokens": 1000,
+        "top_k": 50,         # Anthropic-specific: top-k sampling
+    })
+
+# Google with structured schema
+elif provider == "google":
+    builder.with_model_provider_options({
+        "temperature": 0.2,
+        "max_tokens": 1000,
+        "candidate_count": 3,    # Google-specific: multiple candidates
+        "response_schema": schema # Google-specific: schema validation
+    })
+
+agent = await builder.build()
+```
+
+---
+
 ## 🔧 Available Tools & Integrations
 
 ### 🌐 Web & Data

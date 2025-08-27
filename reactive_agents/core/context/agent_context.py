@@ -55,6 +55,7 @@ import tiktoken
 # Add imports for new components
 from reactive_agents.core.reasoning.task_classifier import TaskClassifier
 from reactive_agents.config.settings import get_settings
+from reactive_agents.core.context.context_manager import ContextManager
 
 
 # Now define AgentContext
@@ -139,6 +140,7 @@ class AgentContext(BaseModel):
     memory_manager: Optional[Union["MemoryManager", "VectorMemoryManager"]] = None
     workflow_manager: Optional["WorkflowManager"] = None
     tool_manager: Optional["ToolManager"] = None
+    context_manager: Optional["ContextManager"] = None
 
     # --- Add Event Bus ---
     event_bus: Optional[EventBus] = None
@@ -260,6 +262,10 @@ class AgentContext(BaseModel):
         # Initialize new components
         if self.enable_reactive_execution:
             self.task_classifier = TaskClassifier(context=self)
+
+        # Initialize context manager
+        self.context_manager = ContextManager(agent_context=self)
+        self.agent_logger.info("Context manager initialized.")
 
         # Initialize event bus if enabled
         if self.enable_state_observation:

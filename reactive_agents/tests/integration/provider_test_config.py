@@ -155,6 +155,21 @@ class ProviderTestConfiguration:
                         typical_latency_ms=1800,
                         reliability_score=0.85,
                     ),
+                    "gemma3n": ModelConfig(
+                        name="gemma3n",
+                        context_window=10000,
+                        capabilities={
+                            # Note: No TOOL_CALLING - this model doesn't support native tool calling
+                            ProviderCapability.SYSTEM_MESSAGES,
+                            ProviderCapability.STREAMING,
+                            ProviderCapability.LARGE_CONTEXT,
+                        },
+                        recommended_params={"temperature": 0.1, "num_ctx": 4000},
+                        cost_per_1k_tokens=0.0,
+                        typical_latency_ms=2500,
+                        reliability_score=0.80,
+                        notes="Uses manual tool calling - no native tool support",
+                    ),
                 },
                 default_params={"temperature": 0.1, "num_ctx": 4000, "stream": False},
                 required_env_vars=[],  # No API key required for local
@@ -211,6 +226,21 @@ class ProviderTestConfiguration:
                         cost_per_1k_tokens=0.0005,
                         typical_latency_ms=600,
                         reliability_score=0.92,
+                    ),
+                    "gpt-3.5-turbo-instruct": ModelConfig(
+                        name="gpt-3.5-turbo-instruct",
+                        max_tokens=4000,
+                        context_window=4096,
+                        capabilities={
+                            # Note: No TOOL_CALLING - completion-only model
+                            ProviderCapability.SYSTEM_MESSAGES,
+                            ProviderCapability.LOW_LATENCY,
+                        },
+                        recommended_params={"temperature": 0.1, "max_tokens": 2000},
+                        cost_per_1k_tokens=0.0015,
+                        typical_latency_ms=500,
+                        reliability_score=0.88,
+                        notes="Uses manual tool calling - completion-only model",
                     ),
                 },
                 default_params={"temperature": 0.1, "max_tokens": 2000, "top_p": 1.0},

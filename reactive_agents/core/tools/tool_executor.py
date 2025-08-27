@@ -4,12 +4,15 @@ import time
 import json
 import traceback
 from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+
+from pydantic import BaseModel
 from reactive_agents.core.tools.abstractions import ToolResult, ToolProtocol
 from reactive_agents.core.types.event_types import AgentStateEvent
 from reactive_agents.core.reasoning.prompts.agent_prompts import (
     TOOL_ACTION_SUMMARY_PROMPT,
     TOOL_SUMMARY_CONTEXT_PROMPT,
 )
+from reactive_agents.core.types.provider_types import CompletionResponse
 from reactive_agents.utils.logging import Logger
 
 if TYPE_CHECKING:
@@ -55,9 +58,6 @@ class ToolExecutor:
                     )
                 else:
                     self.context.tool_logger.debug(f"Result: {result_str}")
-
-            # Generate summary
-            summary = await self._generate_tool_summary(tool_name, params, result_list)
 
             # Handle final answer tool specially
             if tool_name == "final_answer":
@@ -151,20 +151,21 @@ class ToolExecutor:
                     prompt=summary_context_prompt,
                     options=getattr(self.context, "model_provider_options", {}),
                 )
-                tool_action_summary = (
-                    summary_result.message.content.strip()
-                    or f"Executed tool {tool_name}."
-                )
+                if isinstance(summary_result, CompletionResponse):
+                    tool_action_summary = (
+                        summary_result.message.content.strip()
+                        or f"Executed tool {tool_name}."
+                    )
             else:
                 tool_action_summary = f"Executed tool {tool_name}."
 
             # Ensure tool summary is clearly marked
             if not tool_action_summary.startswith("[TOOL SUMMARY]"):
                 tool_action_summary = f"[TOOL SUMMARY] {tool_action_summary}"
-                self.context.session.add_message(
-                    role="assistant",
-                    content=tool_action_summary,
-                )
+                # self.context.session.add_message(
+                #     role="assistant",
+                #     content=tool_action_summary,
+                # )
 
             # Enhanced logging for debugging
             if hasattr(self.context, "tool_logger") and self.context.tool_logger:

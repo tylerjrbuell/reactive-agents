@@ -2,10 +2,12 @@ import json
 import os
 import time
 import asyncio
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Type
 import google.generativeai as genai  # type: ignore
 from google.generativeai.types import HarmCategory, HarmBlockThreshold  # type: ignore
 from google.api_core import exceptions as google_exceptions
+from pydantic import BaseModel
+import instructor
 
 from .base import BaseModelProvider, CompletionMessage, CompletionResponse
 
@@ -58,8 +60,90 @@ class GoogleModelProvider(BaseModelProvider):
         # Initialize the model
         self.generative_model = genai.GenerativeModel(model_name=self.model)  # type: ignore
 
-        # Validate model on initialization
+        # Initialize instructor client for structured outputs
+        try:
+            # Use from_provider method for Google GenAI
+            self.instructor_client = instructor.from_provider(f"google/{self.model}")
+            self._supports_structured = True
+        except Exception as e:
+            if context and hasattr(context, "agent_logger") and context.agent_logger:
+                context.agent_logger.warning(
+                    f"Failed to initialize Instructor client for Google: {e}"
+                )
+            self.instructor_client = None
+            self._supports_structured = False
+
+        # Validate model after initialization
         self.validate_model()
+
+    def get_native_params(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert OpenAI-style parameters to Google Generative AI native parameters.
+
+        Maps OpenAI parameter names to Google GenerationConfig parameter names
+        based on the official Google Generative AI API documentation.
+
+        Args:
+            options: OpenAI-style configuration options
+
+        Returns:
+            Dictionary with Google-native parameter names and values
+        """
+        native_params = {}
+
+        # OpenAI -> Google parameter mappings
+        param_mapping = {
+            "temperature": "temperature",  # Direct mapping (0.0-2.0)
+            "max_tokens": "max_output_tokens",  # OpenAI max_tokens -> Google max_output_tokens
+            "top_p": "top_p",  # Direct mapping (nucleus sampling)
+            "frequency_penalty": "frequency_penalty",  # Direct mapping (0.0-2.0) - supported in newer models
+            "presence_penalty": "presence_penalty",  # Direct mapping (0.0-2.0) - supported in newer models
+            "stop": "stop_sequences",  # OpenAI stop -> Google stop_sequences (up to 5)
+            "seed": "seed",  # Direct mapping for reproducibility
+        }
+
+        for openai_param, google_param in param_mapping.items():
+            if openai_param in options:
+                native_params[google_param] = options[openai_param]
+
+        # Handle stop sequences specifically (can be string or list, up to 5 sequences)
+        if "stop_sequences" in options:
+            stop_sequences = options["stop_sequences"]
+            if isinstance(stop_sequences, list):
+                # Google supports up to 5 stop sequences
+                native_params["stop_sequences"] = stop_sequences[:5]
+            else:
+                native_params["stop_sequences"] = [stop_sequences]
+
+        # Google-specific parameters that don't have direct OpenAI equivalents
+        google_specific = {
+            "top_k": int,  # Google-specific sampling parameter (default 40)
+            "candidate_count": int,  # Number of response candidates (default 1)
+            "response_mime_type": str,  # Response format MIME type
+            "response_schema": dict,  # Structured output schema
+            "response_logprobs": bool,  # Include log probabilities
+            "logprobs": int,  # Number of log probabilities to return
+        }
+
+        for param, expected_type in google_specific.items():
+            if param in options:
+                try:
+                    if expected_type == int:
+                        native_params[param] = int(options[param])
+                    elif expected_type == bool:
+                        native_params[param] = bool(options[param])
+                    elif expected_type == str:
+                        native_params[param] = str(options[param])
+                    elif expected_type == dict and isinstance(options[param], dict):
+                        native_params[param] = options[param]
+                except (ValueError, TypeError):
+                    # Skip invalid parameters
+                    continue
+
+        # Note: Google doesn't directly support stream parameter in GenerationConfig
+        # Stream is handled at the API call level, not in the configuration
+
+        return native_params
 
     def configure_safety_settings(
         self, safety_settings: Optional[Dict[HarmCategory, HarmBlockThreshold]] = None
@@ -372,28 +456,99 @@ class GoogleModelProvider(BaseModelProvider):
             self._handle_error(e, "validation")
             return {"valid": False, "error": str(e)}
 
-    async def get_chat_completion(
+    def _supports_native_tool_calling(self, model: str) -> bool:
+        """
+        Check if the Google model supports native tool calling.
+
+        Most Gemini models support tool calling, but earlier versions may not.
+
+        Args:
+            model: Optional model name to check (defaults to self.model)
+
+        Returns:
+            True if model supports native tool calling, False otherwise
+        """
+        model_to_check = model or self.model
+
+        # Models known to NOT support tool calling
+        non_tool_calling_models = {
+            "gemini-pro-vision",  # Vision-only model
+            "text-bison-001",  # Legacy text model
+            "chat-bison-001",  # Legacy chat model
+            "code-bison-001",  # Legacy code model
+        }
+
+        # Check if model is in non-tool-calling list
+        return model_to_check not in non_tool_calling_models
+
+    async def _execute_structured_chat_completion(
         self,
+        response_model: Type[BaseModel],
         messages: List[dict],
-        stream: bool = False,
-        tools: Optional[List[dict]] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
         options: Optional[Dict[str, Any]] = None,
-        format: str = "",
         **kwargs,
-    ) -> Union[CompletionResponse, Any]:
+    ) -> BaseModel:
+        """
+        Execute structured chat completion using Instructor for Google.
+
+        Args:
+            response_model: The Pydantic model class
+            messages: List of message dictionaries
+            options: Provider-specific options
+            **kwargs: Additional arguments
+
+        Returns:
+            An instance of the response_model
+        """
+        if not self.instructor_client:
+            raise RuntimeError("Instructor client not initialized for Google provider")
+
+        try:
+            # Merge options with defaults
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Get OpenAI-style parameters for Instructor (filters out Google-specific params)
+            openai_params = self.get_openai_params(merged_options)
+
+            # Prepare API call parameters for instructor
+            api_params = {
+                "model": self.model,
+                "messages": messages,
+                "response_model": response_model,
+                **openai_params,
+            }
+
+            # Use instructor client for structured response
+            structured_response = await self._call_instructor_client(
+                "chat.completions.create", **api_params
+            )
+
+            return structured_response
+
+        except Exception as e:
+            self._handle_error(e, "structured_chat_completion")
+            raise Exception(f"Google Structured Chat Completion Error: {str(e)}")
+
+    async def _get_provider_chat_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a chat completion from Google.
 
         Args:
-            messages: List of message dictionaries
-            stream: Whether to stream the response (not fully supported yet)
-            tools: List of tool definitions (function calling)
-            tool_choice: Tool choice preference
-            options: Model-specific options
-            format: Response format ("json" or "")
-            **kwargs: Additional arguments
+            **kwargs: Arbitrary keyword arguments including:
+                - messages: List of message dictionaries
+                - stream: Whether to stream the response (not fully supported yet)
+                - tools: List of tool definitions (function calling)
+                - tool_choice: Tool choice preference
+                - options: Model-specific options
+                - format: Response format ("json" or "")
         """
+        messages = kwargs.get("messages", [])
+        stream = kwargs.get("stream", False)
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             # Prepare messages
             prepared_messages = self._prepare_messages(messages)
@@ -401,13 +556,30 @@ class GoogleModelProvider(BaseModelProvider):
             # Merge options
             merged_options = {**self.default_options, **(options or {})}
 
-            # Create generation config
-            generation_config = genai.types.GenerationConfig(  # type: ignore
-                temperature=merged_options.get("temperature", 0.7),
-                max_output_tokens=merged_options.get("max_output_tokens", 1000),
-                top_p=merged_options.get("top_p", 0.95),
-                top_k=merged_options.get("top_k", 40),
-            )
+            # Convert OpenAI-style parameters to Google-native format
+            native_options = self.get_native_params(merged_options)
+
+            # Create generation config from native parameters
+            generation_config_params = {}
+
+            # Map native parameters to GenerationConfig
+            for param in [
+                "temperature",
+                "max_output_tokens",
+                "top_p",
+                "top_k",
+                "frequency_penalty",
+                "presence_penalty",
+                "stop_sequences",
+                "seed",
+                "candidate_count",
+                "response_mime_type",
+                "response_schema",
+            ]:
+                if param in native_options:
+                    generation_config_params[param] = native_options[param]
+
+            generation_config = genai.types.GenerationConfig(**generation_config_params)  # type: ignore
 
             # Handle JSON format
             if format == "json":
@@ -547,7 +719,10 @@ class GoogleModelProvider(BaseModelProvider):
                             func_call = part.function_call
                             # Handle args properly - Google models may not provide function arguments
                             args_dict = {}
-                            if hasattr(func_call, 'args') and func_call.args is not None:
+                            if (
+                                hasattr(func_call, "args")
+                                and func_call.args is not None
+                            ):
                                 if hasattr(func_call.args, "dict"):
                                     try:
                                         args_dict = func_call.args.dict()
@@ -558,7 +733,11 @@ class GoogleModelProvider(BaseModelProvider):
                                 else:
                                     # Try to convert to dict if possible
                                     try:
-                                        args_dict = dict(func_call.args) if func_call.args else {}
+                                        args_dict = (
+                                            dict(func_call.args)
+                                            if func_call.args
+                                            else {}
+                                        )
                                     except (TypeError, ValueError):
                                         args_dict = {}
 
@@ -649,24 +828,22 @@ class GoogleModelProvider(BaseModelProvider):
             self._handle_error(e, "chat_completion")
             raise Exception(f"Google Chat Completion Error: {str(e)}")
 
-    async def get_completion(
-        self,
-        prompt: str,
-        system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-        format: str = "",
-        **kwargs,
-    ) -> CompletionResponse:
+    async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a text completion from Google using the generative model.
 
         Args:
-            prompt: The prompt text
-            system: Optional system message
-            options: Model-specific options
-            format: Response format ("json" or "")
-            **kwargs: Additional arguments
+            **kwargs: Arbitrary keyword arguments including:
+                - prompt: The prompt text
+                - system: Optional system message
+                - options: Model-specific options
+                - format: Response format ("json" or "")
         """
+        prompt = kwargs.get("prompt", "")
+        system = kwargs.get("system")
+        options = kwargs.get("options")
+        format_param = kwargs.get("format", "")
+
         try:
             # Build messages
             messages = []
@@ -675,8 +852,15 @@ class GoogleModelProvider(BaseModelProvider):
             messages.append({"role": "user", "content": prompt})
 
             # Use chat completion for text completion
-            return await self.get_chat_completion(
-                messages=messages, options=options, format=format, **kwargs
+            # Filter out format and options from kwargs to avoid duplicate parameter errors
+            filtered_kwargs = {
+                k: v for k, v in kwargs.items() if k not in ["format", "options"]
+            }
+            return await self._get_provider_chat_completion(
+                messages=messages,
+                options=options,
+                format=format_param,
+                **filtered_kwargs,
             )
 
         except Exception as e:

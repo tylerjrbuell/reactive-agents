@@ -10,7 +10,7 @@ import sys
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 import click
@@ -176,7 +176,9 @@ def plugins():
     help="Model to use (default: ollama:cogito:14b)",
 )
 @click.option(
-    "--tools", "-T", multiple=True, help="Tools to include (can specify multiple)"
+    "--tools",
+    "-T",
+    help="Tools to include (comma-separated, e.g., 'brave-search,time')",
 )
 @click.option(
     "--interactive",
@@ -197,7 +199,7 @@ def plugins():
 def agent(
     task: Optional[str],
     model: str,
-    tools: tuple,
+    tools: Optional[str],
     interactive: bool,
     verbose: bool,
     strategy: str,
@@ -216,10 +218,13 @@ def agent(
             console.print("[red]No task provided. Exiting.[/red]")
             return
 
-    # Set default tools if none provided
-    if not tools:
-        tools = ("brave-search", "time")
-        console.print(f"[dim]Using default tools: {', '.join(tools)}[/dim]")
+    # Parse tools from comma-separated string
+    if tools:
+        tools_list = [tool.strip() for tool in tools.split(",")]
+        console.print(f"[dim]Using specified tools: {', '.join(tools_list)}[/dim]")
+    else:
+        tools_list = ["brave-search", "time"]
+        console.print(f"[dim]Using default tools: {', '.join(tools_list)}[/dim]")
 
     # Show execution plan
     console.print("[bold]Execution Plan:[/bold]")
@@ -229,7 +234,7 @@ def agent(
 
     plan_table.add_row("Task", task[:100] + "..." if len(task) > 100 else task)
     plan_table.add_row("Model", model)
-    plan_table.add_row("Tools", ", ".join(tools))
+    plan_table.add_row("Tools", ", ".join(tools_list))
     plan_table.add_row("Strategy", strategy)
     plan_table.add_row("Interactive", "Yes" if interactive else "No")
 
@@ -242,7 +247,7 @@ def agent(
         return
 
     # Run the agent
-    asyncio.run(_run_agent(task, model, list(tools), interactive, verbose, strategy))
+    asyncio.run(_run_agent(task, model, tools_list, interactive, verbose, strategy))
 
 
 @make.command()
@@ -250,7 +255,7 @@ def agent(
 @click.option("--description", "-d", help="Natural language description of the agent")
 @click.option("--model", "-m", default="ollama:cogito:14b", help="Model to use")
 @click.option(
-    "--tools", "-t", multiple=True, default=["brave-search", "time"], help="MCP tools"
+    "--tools", "-t", help="MCP tools (comma-separated, e.g., 'brave-search,time')"
 )
 @click.option(
     "--strategy",
@@ -267,7 +272,7 @@ def config(
     name: str,
     description: Optional[str],
     model: str,
-    tools: tuple,
+    tools: Optional[str],
     strategy: str,
     vector_memory: bool,
     output: Optional[str],
@@ -280,19 +285,24 @@ def config(
     print_banner()
 
     try:
+        # Parse tools from comma-separated string
+        if tools:
+            tools_list = [tool.strip() for tool in tools.split(",")]
+        else:
+            tools_list = ["brave-search", "time"]
+
         if description:
             # Use natural language configuration
             console.print("[dim]Using natural language configuration...[/dim]")
             model_provider = ModelProviderFactory.get_model_provider(
                 model, context=None
             )
-            config = asyncio.run(
+            agent = asyncio.run(
                 create_agent_from_nl(description, model_provider=model_provider)
             )
 
-            # Override with CLI arguments
-            config.agent_name = name
-            config.provider_model_name = model
+            # Get config from agent
+            config = agent.config
         else:
             # Use builder pattern
             console.print("[dim]Using builder configuration...[/dim]")
@@ -301,7 +311,7 @@ def config(
                 .with_name(name)
                 .with_model(model)
                 .with_reasoning_strategy(ReasoningStrategies(strategy))
-                .with_mcp_tools(list(tools))
+                .with_mcp_tools(tools_list)
             )
 
             if vector_memory:
@@ -317,7 +327,7 @@ def config(
             "agent_name": getattr(config, "agent_name", name),
             "provider_model_name": getattr(config, "provider_model_name", model),
             "reasoning_strategy": getattr(config, "reasoning_strategy", strategy),
-            "mcp_server_filter": list(tools),
+            "mcp_server_filter": tools_list,
             "vector_memory_enabled": vector_memory,
             "created_at": datetime.now().isoformat(),
             "description": description,
@@ -338,7 +348,7 @@ def config(
         details_table.add_row("Name", name)
         details_table.add_row("Model", model)
         details_table.add_row("Strategy", strategy)
-        details_table.add_row("Tools", ", ".join(tools))
+        details_table.add_row("Tools", ", ".join(tools_list))
         details_table.add_row("Vector Memory", "Yes" if vector_memory else "No")
 
         console.print(details_table)
@@ -473,7 +483,12 @@ def workflow(name: Optional[str], steps: tuple):
 
 
 async def _run_agent(
-    task: str, model: str, tools: list, interactive: bool, verbose: bool, strategy: str
+    task: str,
+    model: str,
+    tools: List[str],
+    interactive: bool,
+    verbose: bool,
+    strategy: str,
 ):
     """Run the agent with the specified configuration."""
     try:
@@ -524,15 +539,15 @@ async def _run_agent(
         console.print("\n[bold green]✅ Task completed![/bold green]\n")
 
         # Show final answer
-        if result.get("final_answer"):
+        if result.final_answer:
             console.print("[bold]Final Answer:[/bold]")
             console.print(
-                Panel(result["final_answer"], title="[bold cyan]Result[/bold cyan]")
+                Panel(result.final_answer, title="[bold cyan]Result[/bold cyan]")
             )
 
         # Show metrics if available
-        if result.get("metrics"):
-            metrics = result["metrics"]
+        if result.task_metrics:
+            metrics = result.task_metrics
             console.print("\n[bold]Execution Metrics:[/bold]")
             metrics_table = Table(show_header=False)
             metrics_table.add_column("Metric", style="cyan", no_wrap=True)
@@ -920,15 +935,15 @@ async def _run_config_agent(
         console.print("\n[bold green]✅ Task completed![/bold green]\n")
 
         # Show final answer
-        if result.get("final_answer"):
+        if result.final_answer:
             console.print("[bold]Final Answer:[/bold]")
             console.print(
-                Panel(result["final_answer"], title="[bold cyan]Result[/bold cyan]")
+                Panel(result.final_answer, title="[bold cyan]Result[/bold cyan]")
             )
 
         # Show metrics if available
-        if result.get("metrics"):
-            metrics = result["metrics"]
+        if result.task_metrics:
+            metrics = result.task_metrics
             console.print("\n[bold]Execution Metrics:[/bold]")
             metrics_table = Table(show_header=False)
             metrics_table.add_column("Metric", style="cyan", no_wrap=True)
@@ -1010,7 +1025,7 @@ def status(show_all, plugin_type):
 
         # Check strategy integration
         try:
-            from reactive_agents.core.reasoning.strategies.strategy_manager import (
+            from reactive_agents.core.reasoning.strategy_manager import (
                 StrategyManager,
             )
             from reactive_agents.core.context.agent_context import AgentContext
@@ -1021,17 +1036,13 @@ def status(show_all, plugin_type):
             )
             strategy_manager = StrategyManager(mock_context)
             available_strategies = strategy_manager.get_available_strategies()
-            plugin_strategies = strategy_manager.get_plugin_strategies()
 
             console.print(
                 f"  • Strategy Manager: [green]✓[/green] ({len(available_strategies)} strategies)"
             )
-            if plugin_strategies:
-                console.print(
-                    f"  • Plugin Strategies: [green]✓[/green] ({len(plugin_strategies)} plugin strategies)"
-                )
-            else:
-                console.print(f"  • Plugin Strategies: [yellow]None loaded[/yellow]")
+            console.print(
+                f"  • Plugin Strategies: [yellow]Not yet implemented[/yellow]"
+            )
 
         except Exception as e:
             console.print(f"  • Strategy Manager: [red]✗[/red] Error: {e}")

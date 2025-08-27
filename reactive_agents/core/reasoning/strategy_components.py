@@ -351,14 +351,14 @@ class PlanningComponent(BaseComponent):
             if self.agent_logger:
                 self.agent_logger.warning("Failed to generate valid plan")
             return Plan(
-                plan_steps=[], metadata={"error": "Failed to generate valid plan"}
+                plan_steps=[]
             )
         try:
             return Plan(**thinking_result.result_json)
         except Exception as e:
             if self.agent_logger:
                 self.agent_logger.warning(f"Plan parse error: {e}")
-            return Plan(plan_steps=[], metadata={"error": str(e)})
+            return Plan(plan_steps=[])
 
 
 class ToolExecutionComponent(BaseComponent):

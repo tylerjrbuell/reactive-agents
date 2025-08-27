@@ -194,7 +194,12 @@ Context: Previous steps and available tools will be provided
 Output Format: JSON
 {
     "next_step": "<specific_tool_action_with_params>",
-    "rationale": "<reasoning_for_action_choice>"
+    "rationale": "<reasoning_for_action_choice>",
+    "tool_needed": "<tool_name_or_null>",
+    "parameters": {"param": "value"},
+    "confidence": 0.0-1.0,
+    "memory_influence": "<how_past_experiences_influenced_decision>",
+    "avoid_patterns": ["pattern1", "pattern2"]
 }
 
 Guidelines:
@@ -205,6 +210,9 @@ Guidelines:
 5. Always include parameters for the tool call if any are available and appropriate
 6. Explain reasoning clearly in the rationale field
 7. When the task requires a final answer, the next_step should be: final_answer(<answer>)
+8. Set confidence as a float between 0.0 and 1.0 based on your certainty
+9. Describe how past experiences influenced this decision in memory_influence
+10. List any patterns from memory to avoid in avoid_patterns
 """
 
 # --- New Step-Based Reflection ---

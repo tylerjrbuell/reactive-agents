@@ -1,10 +1,11 @@
 import json
 import os
 import time
-from typing import List, Dict, Any, Optional, Union
-from openai import OpenAI
+from typing import List, Dict, Any, Optional, Union, Type
+from openai import BaseModel, OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai import OpenAIError, RateLimitError, APITimeoutError
+import instructor
 
 from .base import BaseModelProvider, CompletionMessage, CompletionResponse
 
@@ -37,6 +38,18 @@ class OpenAIModelProvider(BaseModelProvider):
 
         self.client = OpenAI(api_key=api_key)
 
+        # Initialize instructor client for structured outputs
+        try:
+            self.instructor_client = instructor.from_openai(self.client)
+            self._supports_structured = True
+        except Exception as e:
+            if context and hasattr(context, "agent_logger") and context.agent_logger:
+                context.agent_logger.warning(
+                    f"Failed to initialize Instructor client for OpenAI: {e}"
+                )
+            self.instructor_client = None
+            self._supports_structured = False
+
         # Default options
         self.default_options = {
             "temperature": 0.7,
@@ -62,7 +75,7 @@ class OpenAIModelProvider(BaseModelProvider):
             original_content = cleaned.get("content", "")
             tool_call_id = cleaned.get("tool_call_id", "unknown")
             cleaned["content"] = f"[Tool Result for {tool_call_id}]: {original_content}"
-            
+
             # Remove tool-specific fields since we're converting to user message
             cleaned.pop("tool_call_id", None)
 
@@ -78,46 +91,54 @@ class OpenAIModelProvider(BaseModelProvider):
         """Validate and fix message sequence for OpenAI's tool calling requirements."""
         if not messages:
             return messages
-            
+
         validated_messages = []
         i = 0
-        
+
         while i < len(messages):
             msg = messages[i]
-            
+
             # If this is a tool message, ensure it follows an assistant message with tool_calls
             if msg.get("role") == "tool":
                 # Look back to find the most recent assistant message with tool_calls
                 assistant_with_tools_idx = None
                 for j in range(len(validated_messages) - 1, -1, -1):
-                    if (validated_messages[j].get("role") == "assistant" and 
-                        validated_messages[j].get("tool_calls")):
+                    if validated_messages[j].get(
+                        "role"
+                    ) == "assistant" and validated_messages[j].get("tool_calls"):
                         assistant_with_tools_idx = j
                         break
-                
+
                 # If we found an assistant message with tool_calls, but it's not the immediate predecessor
-                if assistant_with_tools_idx is not None and assistant_with_tools_idx != len(validated_messages) - 1:
+                if (
+                    assistant_with_tools_idx is not None
+                    and assistant_with_tools_idx != len(validated_messages) - 1
+                ):
                     # Remove any intermediate messages that aren't tool messages
                     # Keep only tool messages that might be part of the same tool call sequence
-                    filtered_messages = validated_messages[:assistant_with_tools_idx + 1]
-                    for k in range(assistant_with_tools_idx + 1, len(validated_messages)):
+                    filtered_messages = validated_messages[
+                        : assistant_with_tools_idx + 1
+                    ]
+                    for k in range(
+                        assistant_with_tools_idx + 1, len(validated_messages)
+                    ):
                         if validated_messages[k].get("role") == "tool":
                             filtered_messages.append(validated_messages[k])
                     validated_messages = filtered_messages
-                
+
                 validated_messages.append(msg)
             else:
                 validated_messages.append(msg)
-            
+
             i += 1
-        
+
         return validated_messages
 
     def _process_tool_calls(self, tool_calls):
         """Process tool calls to ensure arguments are properly formatted as dictionaries."""
         if not tool_calls:
             return None
-            
+
         processed_calls = []
         for call in tool_calls:
             processed_call = {
@@ -128,19 +149,21 @@ class OpenAIModelProvider(BaseModelProvider):
                     "arguments": call.function.arguments,
                 },
             }
-            
+
             # Ensure function arguments are dictionaries, not JSON strings
             args = processed_call["function"]["arguments"]
             if isinstance(args, str):
                 try:
-                    processed_call["function"]["arguments"] = json.loads(args) if args else {}
+                    processed_call["function"]["arguments"] = (
+                        json.loads(args) if args else {}
+                    )
                 except (json.JSONDecodeError, TypeError):
                     processed_call["function"]["arguments"] = {}
             elif not isinstance(args, dict):
                 processed_call["function"]["arguments"] = {}
-                    
+
             processed_calls.append(processed_call)
-            
+
         return processed_calls
 
     def validate_model(self, **kwargs) -> dict:
@@ -161,16 +184,87 @@ class OpenAIModelProvider(BaseModelProvider):
             self._handle_error(e, "validation")
             return {"valid": False, "error": str(e)}
 
-    async def get_chat_completion(
+    def _supports_native_tool_calling(self, model: str) -> bool:
+        """
+        Check if the OpenAI model supports native tool calling.
+
+        OpenAI models generally support tool calling, but we can check specific models
+        that are known to have limitations.
+
+        Args:
+            model: Optional model name to check (defaults to self.model)
+
+        Returns:
+            True if model supports native tool calling, False otherwise
+        """
+        model_to_check = model or self.model
+
+        # Models known to NOT support tool calling
+        non_tool_calling_models = {
+            "gpt-3.5-turbo-instruct",  # Completion-only model
+            "text-davinci-003",  # Legacy completion model
+            "text-davinci-002",  # Legacy completion model
+            "davinci",  # Legacy model
+            "curie",  # Legacy model
+            "babbage",  # Legacy model
+            "ada",  # Legacy model
+        }
+
+        # Check if model is in non-tool-calling list
+        return model_to_check not in non_tool_calling_models
+
+    async def _execute_structured_chat_completion(
         self,
+        response_model: Type[BaseModel],
         messages: List[dict],
-        stream: bool = False,
-        tools: Optional[List[dict]] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
         options: Optional[Dict[str, Any]] = None,
-        format: str = "",
         **kwargs,
-    ) -> Union[CompletionResponse, Any]:
+    ) -> BaseModel:
+        """
+        Execute structured chat completion using Instructor for OpenAI.
+
+        Args:
+            response_model: The Pydantic model class
+            messages: List of message dictionaries
+            options: Provider-specific options
+            **kwargs: Additional arguments
+
+        Returns:
+            An instance of the response_model
+        """
+        if not self.instructor_client:
+            raise RuntimeError("Instructor client not initialized for OpenAI provider")
+
+        try:
+            # Clean messages
+            cleaned_messages = [self._clean_message(msg) for msg in messages]
+
+            # Validate message sequence for OpenAI's tool calling requirements
+            cleaned_messages = self._validate_message_sequence(cleaned_messages)
+
+            # Merge options
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Prepare API call parameters for instructor
+            api_params = {
+                "model": self.model,
+                "messages": cleaned_messages,
+                "response_model": response_model,
+                **merged_options,
+            }
+
+            # Use instructor client for structured response
+            structured_response = await self._call_instructor_client(
+                "chat.completions.create", **api_params
+            )
+
+            return structured_response
+
+        except Exception as e:
+            self._handle_error(e, "structured_chat_completion")
+            raise Exception(f"OpenAI Structured Chat Completion Error: {str(e)}")
+
+    async def _get_provider_chat_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a chat completion from OpenAI.
 
@@ -183,10 +277,17 @@ class OpenAIModelProvider(BaseModelProvider):
             format: Response format ("json" or "")
             **kwargs: Additional arguments
         """
+        messages = kwargs.get("messages", [])
+        stream = kwargs.get("stream", False)
+        tools = kwargs.get("tools")
+        tool_choice = kwargs.get("tool_choice")
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             # Clean messages
             cleaned_messages = [self._clean_message(msg) for msg in messages]
-            
+
             # Validate message sequence for OpenAI's tool calling requirements
             cleaned_messages = self._validate_message_sequence(cleaned_messages)
 
@@ -209,14 +310,15 @@ class OpenAIModelProvider(BaseModelProvider):
                 else:
                     api_params["tool_choice"] = tool_choice
 
+            # Handle JSON format (structured outputs handled by base class)
             if format == "json":
                 api_params["response_format"] = {"type": "json_object"}
 
-            # Create completion
+            # Create completion (no more custom parse() logic)
             completion = self.client.chat.completions.create(**api_params)
 
             if stream:
-                return completion  # Return stream object directly
+                return completion
 
             # Process non-streaming response
             result = completion.choices[0]
@@ -262,14 +364,7 @@ class OpenAIModelProvider(BaseModelProvider):
             self._handle_error(e, "chat_completion")
             raise Exception(f"OpenAI Chat Completion Error: {str(e)}")
 
-    async def get_completion(
-        self,
-        prompt: str,
-        system: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-        format: str = "",
-        **kwargs,
-    ) -> CompletionResponse:
+    async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         """
         Get a text completion from OpenAI using the chat completions API.
 
@@ -280,6 +375,11 @@ class OpenAIModelProvider(BaseModelProvider):
             format: Response format ("json" or "")
             **kwargs: Additional arguments
         """
+        prompt = kwargs.get("prompt", "")
+        system = kwargs.get("system")
+        options = kwargs.get("options")
+        format = kwargs.get("format", "")
+
         try:
             # Build messages
             messages = []
@@ -288,8 +388,14 @@ class OpenAIModelProvider(BaseModelProvider):
             messages.append({"role": "user", "content": prompt})
 
             # Use chat completion for text completion
-            return await self.get_chat_completion(
-                messages=messages, options=options, format=format, **kwargs
+            # Remove conflicting parameters from kwargs to avoid "multiple values" error
+            filtered_kwargs = {
+                k: v
+                for k, v in kwargs.items()
+                if k not in ["messages", "options", "format"]
+            }
+            return await self._get_provider_chat_completion(
+                messages=messages, options=options, format=format, **filtered_kwargs
             )
 
         except Exception as e:

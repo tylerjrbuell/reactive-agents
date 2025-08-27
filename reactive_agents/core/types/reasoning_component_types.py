@@ -39,12 +39,14 @@ class StepResult(BaseModel):
 
     success: bool
     step_name: str
-    output: Dict[str, Any] = {}
+    output: Optional[str] = None
     error: Optional[str] = None
     next_step: Optional[str] = None
     should_continue: bool = True
     confidence: float = 0.5
-    metadata: Dict[str, Any] = {}
+
+    class Config:
+        extra = "forbid"
 
     def is_successful(self) -> bool:
         """Returns True if the step was successful."""
@@ -87,7 +89,6 @@ class Plan(BaseModel):
     """A plan with steps."""
 
     plan_steps: List[PlanStep] = []
-    metadata: Dict[str, Any] = {}
 
     def get_next_step(self) -> Optional[PlanStep]:
         """Get the next step to execute."""
@@ -114,7 +115,7 @@ class Plan(BaseModel):
             step.result = StepResult(
                 success=True,
                 step_name=step.description,
-                output={"result": result_content},
+                output=result_content,
             )
         else:
             step.retries += 1

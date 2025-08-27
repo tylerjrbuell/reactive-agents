@@ -13,6 +13,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import json
+import time
 from datetime import datetime
 
 # Add project root to path
@@ -59,6 +60,69 @@ async def math_test_tool(a: int, b: int, operation: str = "add") -> str:
     else:
         return "Invalid operation"
     return f"Result: {a} {operation} {b} = {result}"
+
+
+@tool()
+async def structured_output_test_tool(data: dict) -> dict:
+    """
+    Test tool that processes structured data to verify JSON handling.
+    
+    This tool takes a dictionary as input and returns a structured response
+    to test how well providers handle complex JSON input/output scenarios.
+    
+    Args:
+        data: A dictionary containing test data with keys 'category', 'items', and 'metadata'
+        
+    Returns:
+        A structured dictionary with processed results, statistics, and validation info
+    """
+    # Validate input structure
+    if not isinstance(data, dict):
+        return {"error": "Input must be a dictionary", "success": False}
+    
+    required_keys = ['category', 'items']
+    missing_keys = [key for key in required_keys if key not in data]
+    if missing_keys:
+        return {
+            "error": f"Missing required keys: {missing_keys}",
+            "success": False
+        }
+    
+    # Process the data
+    category = data.get('category', 'unknown')
+    items = data.get('items', [])
+    metadata = data.get('metadata', {})
+    
+    # Generate statistics
+    stats = {
+        "total_items": len(items),
+        "category": category,
+        "has_metadata": bool(metadata),
+        "item_types": list(set(type(item).__name__ for item in items)) if items else []
+    }
+    
+    # Create structured response
+    return {
+        "success": True,
+        "input_category": category,
+        "processed_items": [
+            {
+                "index": i,
+                "value": item,
+                "type": type(item).__name__,
+                "processed": True
+            }
+            for i, item in enumerate(items)
+        ],
+        "statistics": stats,
+        "metadata_processed": metadata,
+        "validation": {
+            "input_valid": True,
+            "structure_correct": True,
+            "processing_complete": True
+        },
+        "timestamp": str(time.time())
+    }
 
 
 class ProviderIssueDiagnoser:
@@ -243,7 +307,7 @@ class ProviderIssueDiagnoser:
                     "You are a test agent. Use tools as requested and be concise."
                 )
                 .with_reasoning_strategy(ReasoningStrategies.REACTIVE)
-                .with_custom_tools([simple_test_tool])
+                .with_custom_tools([simple_test_tool, math_test_tool, structured_output_test_tool])
                 .with_max_iterations(self.max_iterations)
             )
 
@@ -258,9 +322,25 @@ class ProviderIssueDiagnoser:
 
             agent = await builder.build()
 
-            # Run a simple task
+            # Run a comprehensive task that tests multiple capabilities
+            comprehensive_task = """
+            Complete these tasks to test structured output handling:
+            
+            1. Use simple_test_tool to process the message 'Hello World'
+            2. Use math_test_tool to calculate 15 + 25
+            3. Use structured_output_test_tool with this data: {
+                "category": "test_data",
+                "items": ["apple", "banana", 42, true],
+                "metadata": {"source": "diagnostic_test", "version": "1.0"}
+            }
+            4. If MCP tools are available, try to use one MCP tool (any available tool is fine)
+            5. Provide a final summary of all tool results in JSON format
+            
+            Be systematic and use each tool as requested. Focus on demonstrating structured input/output handling.
+            """
+            
             result = await asyncio.wait_for(
-                agent.run("Use simple_test_tool to process the message 'Hello World'"),
+                agent.run(comprehensive_task),
                 timeout=float(self.timeout),
             )
 

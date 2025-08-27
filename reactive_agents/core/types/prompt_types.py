@@ -6,19 +6,26 @@ from typing import List, Dict, Any, Optional, Literal
 class SingleStepPlanningOutput(BaseModel):
     next_step: str = Field(description="Specific action to take")
     rationale: str = Field(description="Reasoning for this step")
-    tool_needed: Optional[str] = Field(description="Tool name if required, null otherwise")
+    tool_needed: Optional[str] = Field(
+        default=None, description="Tool name if required, null otherwise"
+    )
     parameters: Dict[str, Any] = Field(default_factory=dict)
-    confidence: float = Field(ge=0.0, le=1.0)
-    memory_influence: str = Field(description="How past experiences influenced this decision")
-    avoid_patterns: List[str] = Field(description="Patterns from memory to avoid")
-
-
-
+    confidence: float = Field(
+        default=0.8, ge=0.0, le=1.0, description="Confidence level in this decision"
+    )
+    memory_influence: str = Field(
+        default="No specific memory influence",
+        description="How past experiences influenced this decision",
+    )
+    avoid_patterns: List[str] = Field(
+        default_factory=list, description="Patterns from memory to avoid"
+    )
 
 
 class ToolCall(BaseModel):
     name: str
     arguments: Dict[str, Any]
+
 
 class FunctionCall(BaseModel):
 
@@ -41,7 +48,9 @@ class ToolSelectionOutput(BaseModel):
 
 
 class FinalAnswerOutput(BaseModel):
-    final_answer: str = Field(description="Comprehensive answer that directly addresses the original task")
+    final_answer: str = Field(
+        description="Comprehensive answer that directly addresses the original task"
+    )
     summary: str = Field(description="Brief summary of what was accomplished")
     key_findings: List[str]
     confidence: float = Field(ge=0.0, le=1.0)
@@ -66,7 +75,9 @@ class ErrorRecoveryOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     error_analysis: str = Field(description="Analysis of what went wrong")
     prevention_measures: List[str]
-    tool_adjustments: Dict[str, str] = Field(description="<tool_name>: <adjustment_needed>")
+    tool_adjustments: Dict[str, str] = Field(
+        description="<tool_name>: <adjustment_needed>"
+    )
 
 
 class TaskCompletionValidationOutput(BaseModel):
@@ -77,7 +88,9 @@ class TaskCompletionValidationOutput(BaseModel):
 
 
 class PlanProgressReflectionOutput(BaseModel):
-    progress_assessment: str = Field(description="Detailed evaluation of current progress")
+    progress_assessment: str = Field(
+        description="Detailed evaluation of current progress"
+    )
     current_step_status: Literal["pending", "in_progress", "completed", "failed"]
     overall_completion_score: float = Field(ge=0.0, le=1.0)
     blockers: List[str]
@@ -108,7 +121,3 @@ class TaskGoalEvaluationOutput(BaseModel):
     completion_score: float = Field(ge=0.0, le=1.0)
     reasoning: str
     missing_requirements: List[str]
-
-
-class ToolCallSystemOutput(BaseModel):
-    tool_calls: List[FunctionCall]

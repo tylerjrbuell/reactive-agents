@@ -42,6 +42,10 @@ class AgentLifecycleProtocol(Protocol):
         """Run the agent with a task."""
         ...
 
+    async def chat(self, initial_task: str, **kwargs) -> Dict[str, Any]:
+        """Run the agent with a task."""
+        ...
+
 
 class AgentControlProtocol(Protocol):
     """Protocol for agent control operations."""
@@ -169,7 +173,44 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                     f"Using model provider options: {self.context.model_provider_options}"
                 )
                 kwargs["options"] = self.context.model_provider_options
-            result = await self.model_provider.get_completion(**kwargs)
+
+            # Check if format is a BaseModel class for structured output
+            format_param = kwargs.get("format", "")
+            from pydantic import BaseModel
+
+            if isinstance(format_param, type) and issubclass(format_param, BaseModel):
+                # Use structured output with the new provider interface
+                self.agent_logger.debug(
+                    f"Using structured output with model: {format_param.__name__}"
+                )
+                structured_result = await self.model_provider.get_completion(**kwargs)
+
+                # Handle structured response
+                if isinstance(structured_result, BaseModel):
+                    # Direct structured response
+                    execution_time = time.time() - start_time
+                    if self.context.metrics_manager:
+                        # For structured outputs, we don't have traditional metrics
+                        self.context.metrics_manager.update_model_metrics(
+                            {
+                                "time": execution_time,
+                                "prompt_tokens": 0,  # Not available for structured outputs
+                                "completion_tokens": 0,
+                            }
+                        )
+
+                    return AgentThinkResult(
+                        content=str(structured_result),
+                        result_json=structured_result.model_dump(),
+                        result={"structured": True, "model": format_param.__name__},
+                    )
+                else:
+                    # Fallback to regular processing if structured output failed
+                    result = structured_result
+            else:
+                # Regular completion
+                result = await self.model_provider.get_completion(**kwargs)
+
             # Metric Tracking
             execution_time = time.time() - start_time
             if self.context.metrics_manager:
@@ -186,11 +227,12 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                     "Direct completion did not return a valid message structure."
                 )
                 return None
+
             result_json = {}
             message = result.message
             message_content: str = message.content or ""
 
-            # Parse JSON from result.content if present and assign to result_json if available
+            # Enhanced JSON extraction for different providers
             if message_content:
                 result_json = extract_json_from_string(message_content)
 
@@ -238,11 +280,62 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                 )
                 kwargs["options"] = self.context.model_provider_options
 
-            result = await self.model_provider.get_chat_completion(
-                tools=tool_signatures if use_tools else [],
-                tool_use_required=use_tools,
-                **kwargs,
-            )
+            # Check if format is a BaseModel class for structured output
+            format_param = kwargs.get("format", "")
+            from pydantic import BaseModel
+
+            if isinstance(format_param, type) and issubclass(format_param, BaseModel):
+                # Use structured output with the new provider interface
+                self.agent_logger.debug(
+                    f"Using structured chat completion with model: {format_param.__name__}"
+                )
+                structured_result = await self.model_provider.get_chat_completion(
+                    tools=tool_signatures if use_tools else [],
+                    tool_use_required=use_tools,
+                    **kwargs,
+                )
+
+                # Handle structured response
+                if isinstance(structured_result, BaseModel):
+                    # Direct structured response
+                    execution_time = time.time() - start_time
+                    if self.context.metrics_manager:
+                        # For structured outputs, we don't have traditional metrics
+                        self.context.metrics_manager.update_model_metrics(
+                            {
+                                "time": execution_time,
+                                "prompt_tokens": 0,  # Not available for structured outputs
+                                "completion_tokens": 0,
+                            }
+                        )
+
+                    structured_content = str(structured_result)
+                    if structured_content.strip() and remember_messages:
+                        # Add assistant response to context's message history
+                        self.context.session.messages.append(
+                            {"role": "assistant", "content": structured_content}
+                        )
+                        self.agent_logger.debug(
+                            f"Added structured assistant message to context: {structured_content[:100]}..."
+                        )
+
+                    return AgentThinkChainResult(
+                        content=structured_content,
+                        result_json=structured_result.model_dump(),
+                        tool_calls=[],  # Structured outputs don't typically include tool calls
+                        result={"structured": True, "model": format_param.__name__},
+                    )
+                else:
+                    # Fallback to regular processing if structured output failed
+                    result = structured_result
+            else:
+                # Regular chat completion
+                result = await self.model_provider.get_chat_completion(
+                    tools=tool_signatures if use_tools else [],
+                    tool_use_required=use_tools,
+                    **kwargs,
+                )
+
             self.agent_logger.debug(f"Chat completion result: {result}")
 
             # Metric Tracking
@@ -366,16 +459,16 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                     # ToolCall object with function attribute
                     function_obj = getattr(tool_call, "function")
                     tool_name = getattr(function_obj, "name", "unknown")
-                    tool_args = getattr(function_obj, "arguments", {})
+                    tool_args = getattr(function_obj, "arguments", {}) or {}
                 elif isinstance(tool_call, dict):
                     # Dict structure - check for nested function
                     if "function" in tool_call:
                         tool_name = tool_call["function"].get("name", "unknown")
-                        tool_args = tool_call["function"].get("arguments", {})
+                        tool_args = tool_call["function"].get("arguments", {}) or {}
                     else:
                         # Legacy dict structure
                         tool_name = tool_call.get("name", "unknown")
-                        tool_args = tool_call.get("arguments", {})
+                        tool_args = tool_call.get("arguments", {}) or {}
                 else:
                     tool_name = "unknown"
                     tool_args = {}
@@ -426,14 +519,16 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                 if hasattr(tool_call, "function") and not isinstance(tool_call, dict):
                     function_obj = getattr(tool_call, "function")
                     error_tool_name = getattr(function_obj, "name", "unknown")
-                    error_tool_args = getattr(function_obj, "arguments", {})
+                    error_tool_args = getattr(function_obj, "arguments", {}) or {}
                 elif isinstance(tool_call, dict):
                     if "function" in tool_call:
                         error_tool_name = tool_call["function"].get("name", "unknown")
-                        error_tool_args = tool_call["function"].get("arguments", {})
+                        error_tool_args = (
+                            tool_call["function"].get("arguments", {}) or {}
+                        )
                     else:
                         error_tool_name = tool_call.get("name", "unknown")
-                        error_tool_args = tool_call.get("arguments", {})
+                        error_tool_args = tool_call.get("arguments", {}) or {}
 
                 self.agent_logger.error(
                     f"Tool execution error for {error_tool_name}: {e}"
@@ -623,6 +718,28 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
                 error_result, initial_task, success=False
             )
 
+    async def chat(
+        self, initial_task: Optional[str] = None, **kwargs
+    ) -> Dict[str, Any]:
+        curr_task = ""
+        self.agent_logger.info(
+            f"🚀 {self.context.agent_name} chat session... {curr_task[:100]}..."
+        )
+        while curr_task != "quit" or curr_task != "exit":
+            try:
+                if not curr_task and initial_task:
+                    curr_task = initial_task
+                else:
+                    curr_task = input(f"👤 {self.context.agent_name} >>> ")
+                result = await self.run(curr_task, **kwargs)
+            except Exception as e:
+                self.agent_logger.error(
+                    f"❌ {self.context.agent_name} execution failed: {e}"
+                )
+                curr_task = "quit"
+
+        return result
+
     def _prepare_final_result_with_metrics(
         self, base_result: Dict[str, Any], initial_task: str, success: bool = True
     ) -> Dict[str, Any]:
@@ -768,6 +885,7 @@ def extract_json_from_string(s: str):
     Returns the parsed object (dict/list) or {} if not found/invalid.
     """
     s = s.strip()
+
     # Try parsing the whole string first
     try:
         return json.loads(s)

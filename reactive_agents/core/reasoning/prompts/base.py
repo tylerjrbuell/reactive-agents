@@ -15,7 +15,6 @@ from reactive_agents.core.types.prompt_types import (
     StrategyTransitionOutput,
     TaskCompletionValidationOutput,
     TaskGoalEvaluationOutput,
-    ToolCallSystemOutput,
     ToolSelectionOutput,
 )
 from reactive_agents.core.types.reasoning_component_types import Plan, ReflectionResult
@@ -42,7 +41,6 @@ PromptKey = Literal[
     "task_goal_evaluation",
     "tool_call_system",
     "memory_summarization",
-    "ollama_manual_tool",
     "execution_result_summary",
 ]
 
@@ -84,8 +82,7 @@ class BasePrompt(ABC):
         """The Pydantic model describing the expected output format, if any."""
         return None
 
-    @property
-    def system_prompt(self) -> Optional[str]:
+    def system_prompt(self, **kwargs) -> Optional[str]:
         """The system prompt to be used for the prompt."""
         return None
 
@@ -112,10 +109,8 @@ class BasePrompt(ABC):
         # 2. Call the engine's think method with the prompt and the output model
         return await self.context.reasoning_engine.think(
             prompt=prompt_string,
-            format=(
-                self.output_model.model_json_schema() if self.output_model else "json"
-            ),
-            system=self.system_prompt,
+            format=(self.output_model if self.output_model else None),
+            system=self.system_prompt(**kwargs) if self.system_prompt else None,
         )
 
     def _get_prompt_context(self, **kwargs) -> PromptContext:
@@ -276,7 +271,7 @@ class SingleStepPlanningPrompt(BasePrompt):
                 f"\n\nGOAL EVALUATION FEEDBACK: {json.dumps(goal_evaluation, indent=2)}"
             )
 
-        prompt += """\n\nGuidelines:\n- Generate ONE optimal next step, not a full plan\n- Be specific about tool usage and parameters\n- Use the tool signatures to understand required parameters and their types\n- Consider the current context and previous attempts\n- Adapt based on task type and complexity\n- Focus on making immediate progress toward the goal\n- Learn from past experiences - what worked and what didn't\n- Avoid repeating patterns that led to failure in similar situations\n- Ensure parameters match the expected data types from the tool signatures"""
+        prompt += """\n\nGuidelines:\n- Generate ONE optimal next step, not a full plan\n- Be specific about tool usage and parameters\n- Use the tool signatures to understand required parameters and their types\n- Consider the current context and previous attempts\n- Adapt based on task type and complexity\n- Focus on making immediate progress toward the goal\n- Learn from past experiences - what worked and what didn't\n- Avoid repeating patterns that led to failure in similar situations\n- Ensure parameters match the expected data types from the tool signatures\n\nIMPORTANT: You must return a JSON object with ALL required fields:\n- next_step: The specific action to take\n- rationale: Your reasoning for this step\n- tool_needed: The tool name if required, or null\n- parameters: Any parameters for the tool (empty object if none)\n- confidence: A number between 0.0 and 1.0\n- memory_influence: How past experiences influenced this decision\n- avoid_patterns: List of patterns to avoid (empty array if none)"""
 
         return prompt
 
@@ -351,22 +346,181 @@ class ToolSelectionPrompt(BasePrompt):
     def output_model(self) -> Optional[Type[BaseModel]]:
         return ToolSelectionOutput
 
-    def generate(self, **kwargs) -> str:
-        """Generate a tool selection prompt."""
+    def system_prompt(self, **kwargs) -> str:
         context = self._get_prompt_context(**kwargs)
-        step_description = kwargs.get("step_description", "Execute the next action")
+        tool_signatures = kwargs.get("tool_signatures", context.tool_signatures)
+        max_calls = kwargs.get("max_calls", 1)
+        task = kwargs.get("task", context.task)
 
-        if not context.tool_signatures:
-            return "No tools available for this task."
+        # Get enhanced context information
+        context_summary = kwargs.get("context_summary", "")
+        recent_tool_results = kwargs.get("recent_tool_results", [])
+        conversation_context = kwargs.get("conversation_context", [])
+        tool_summaries = kwargs.get("tool_summaries", [])
 
-        prompt = f"""You are a tool selection expert. Choose and configure the optimal tool for this step.\n\nStep: {step_description}\nTask Context: {context.task}\n\nAvailable Tools:\n{json.dumps(context.tool_signatures, indent=2)}"""
+        # Build context-aware system prompt
+        prompt_parts = [
+            f"Role: Tool Selection and Configuration Expert",
+            f"Objective: Create a maximum of {max_calls} tool call(s) for the task: {task}",
+            "",
+            "# Context Information",
+        ]
 
-        if context.recent_messages:
-            prompt += f"\nRecent Context: {json.dumps(context.recent_messages[-2:], indent=2)}"
+        # Add conversation context if available
+        if conversation_context:
+            prompt_parts.append("## Recent Conversation:")
+            for i, msg in enumerate(conversation_context[-3:], 1):  # Last 3 messages
+                role = msg.get("role", "unknown")
+                content = str(msg.get("content", ""))[:150]
+                if content:
+                    prompt_parts.append(f"{i}. {role}: {content}...")
 
-        prompt += """\n\nGuidelines:\n- Select the most appropriate tool for the specific step\n- Provide accurate parameters based on tool signatures\n- Consider the context and previous attempts\n- Only use tools that are actually available\n- Ensure parameters match the expected data types"""
+        if tool_summaries:
+            prompt_parts.append("\n## Tool Summaries:")
+            for i, summary in enumerate(tool_summaries[-3:], 1):  # Last 3 summaries
+                prompt_parts.append(f"{i}. {summary}")
 
-        return prompt
+        # Add tool execution history if available
+        if recent_tool_results:
+            prompt_parts.append("\n## Previous Tool Results:")
+            for i, result in enumerate(recent_tool_results[-3:], 1):  # Last 3 results
+                prompt_parts.append(f"{i}. {result}")
+
+        # Add context summary
+        if context_summary:
+            prompt_parts.append(f"\n## Context Summary:\n{context_summary}")
+
+        prompt_parts.extend(
+            [
+                "",
+                "# Guidelines:",
+                "- PRIORITIZE: Use conversation history and tool results to inform tool selection",
+                "- DEPENDENCIES: If previous tool results contain data needed for this task, reference them",
+                "- CONTEXT-AWARE: Consider the conversation flow and what has already been accomplished",
+                "- PARAMETERS: Use specific values from previous results when available (IDs, paths, etc.)",
+                "- AVOID REDUNDANCY: Don't repeat tool calls that have already been successful",
+                "- TOOL SIGNATURES: Use exact parameter names and types from the tool signatures",
+                "- CONVERSATION FLOW: Understand the multi-turn nature of the interaction",
+                "- REFERENCE DATA: Extract specific values from previous tool results for parameters",
+                "",
+                "# Tool Selection Strategy:",
+                "1. Analyze conversation context to understand what has been done",
+                "2. Review previous tool results for relevant data and dependencies",
+                "3. Select tools that build upon previous results or fill missing gaps",
+                "4. Use specific parameter values from context when available",
+                "5. Ensure tool calls align with the overall conversation objective",
+                "",
+                f"# Available Tool Signatures:",
+                f"{json.dumps(tool_signatures, indent=2)}",
+            ]
+        )
+
+        return "\n".join(prompt_parts)
+
+    def generate(self, **kwargs) -> str:
+        """Generate a context-aware tool selection prompt."""
+        context = self._get_prompt_context(**kwargs)
+
+        # Get enhanced context information
+        context_summary = kwargs.get("context_summary", "")
+        recent_tool_results = kwargs.get("recent_tool_results", [])
+        conversation_context = kwargs.get("conversation_context", [])
+        enriched_task = kwargs.get("task", context.task)
+
+        prompt_parts = [
+            "# Tool Selection Task",
+            f"Primary Task: {enriched_task}",
+            "",
+            "# Context Analysis",
+        ]
+
+        # Add conversation flow analysis
+        if conversation_context:
+            user_messages = [m for m in conversation_context if m.get("role") == "user"]
+            assistant_messages = [
+                m for m in conversation_context if m.get("role") == "assistant"
+            ]
+
+            prompt_parts.extend(
+                [
+                    "## Conversation Flow:",
+                    f"- {len(user_messages)} user request(s) in recent context",
+                    f"- {len(assistant_messages)} assistant response(s) in recent context",
+                    "- This is a multi-turn conversation requiring context awareness",
+                ]
+            )
+
+        # Add tool execution context
+        if recent_tool_results:
+            successful_tools = [
+                r
+                for r in recent_tool_results
+                if "error" not in str(r.get("content", "")).lower()
+            ]
+            failed_tools = [
+                r
+                for r in recent_tool_results
+                if "error" in str(r.get("content", "")).lower()
+            ]
+
+            prompt_parts.extend(
+                [
+                    "",
+                    "## Tool Execution History:",
+                    f"- {len(successful_tools)} successful tool execution(s)",
+                    f"- {len(failed_tools)} failed tool execution(s)",
+                    "- Previous results may contain data needed for current task",
+                ]
+            )
+
+            # Highlight available data from previous results
+            if successful_tools:
+                prompt_parts.append("\n## Available Data from Previous Tools:")
+                for result in successful_tools[-2:]:  # Last 2 successful results
+                    tool_name = result.get("metadata", {}).get("tool_name", "unknown")
+                    content = str(result.get("content", ""))
+
+                    # Extract potential parameter values
+                    if (
+                        "id" in content.lower()
+                        or "path" in content.lower()
+                        or "url" in content.lower()
+                    ):
+                        prompt_parts.append(
+                            f"- {tool_name}: Contains identifiers/paths that may be needed"
+                        )
+                    elif len(content) > 20:
+                        prompt_parts.append(f"- {tool_name}: {content[:100]}...")
+
+        prompt_parts.extend(
+            [
+                "",
+                "# Tool Selection Instructions",
+                "",
+                "Based on the context above, generate the most appropriate tool call(s) that:",
+                "",
+                "1. **Address the Primary Task**: Directly work toward completing the stated objective",
+                "2. **Leverage Context**: Use information from previous tool results and conversation",
+                "3. **Avoid Redundancy**: Don't repeat successful operations already completed",
+                "4. **Use Specific Data**: Reference exact values (IDs, paths, etc.) from previous results",
+                "5. **Follow Dependencies**: Ensure tool calls build logically on previous work",
+                "6. **Use Tool Signatures**: Use exact parameter names and types from the tool signatures",
+                "7. **Use the final_answer Tool**: **Call the built-in final_answer tool if the task is complete and should be finalized**",
+                "",
+                "# Output Requirements",
+                "",
+                "Generate a JSON response with 'tool_calls' array containing tool call objects.",
+                "Each tool call must include:",
+                "- 'function': object with 'name' and 'arguments'",
+                "- All required parameters from the tool signature",
+                "- Specific values from context when available",
+                "",
+                "Remember: This tool selection is happening in the context of an ongoing conversation.",
+                "The tool call should make sense given what has already been discussed and accomplished.",
+            ]
+        )
+
+        return "\n".join(prompt_parts)
 
 
 class FinalAnswerPrompt(BasePrompt):
@@ -409,7 +563,16 @@ class FinalAnswerPrompt(BasePrompt):
             "progress_assessment", "Task appears complete"
         )
 
-        prompt = f"""You are a task completion specialist. Generate a comprehensive final answer based on task context and progress.\n\n        Task: {context.task}\n        Role: {context.role}\n        Instructions: {context.instructions}\n\n        Context and Progress:\n        - Completion Score: {completion_score}\n        - Success Indicators: {', '.join(success_indicators)}\n        - Progress Assessment: {progress_assessment}\n        - Iteration Count: {context.iteration_count}"""
+        prompt = f"""You are a task completion specialist.
+        Generate a comprehensive final answer based on task context and progress.
+        Task: {context.task}
+        Role: {context.role}
+        Instructions: {context.instructions}
+        Context and Progress: 
+        - Completion Score: {completion_score}
+        - Success Indicators: {', '.join(success_indicators)}
+        - Progress Assessment: {progress_assessment}
+        - Iteration Count: {context.iteration_count}"""
 
         prompt += f"\n\nRecent Messages:\n{messages_summary}\n"
 
@@ -492,7 +655,6 @@ class PlanGenerationPrompt(BasePrompt):
     def output_model(self) -> Optional[Type[BaseModel]]:
         return Plan
 
-    @property
     def system_prompt(self) -> Optional[str]:
         return """
     Role: You are a task planner. 
@@ -509,6 +671,8 @@ class PlanGenerationPrompt(BasePrompt):
         - Aim for 3-7 steps total (if possible) but more importantly enough steps to accomplish the task.
         - **IMPORTANT** ALWAYS include verification steps in your plan to ensure each action accomplished what it was intended to do.
         
+    **Response Format:**
+    - Respond in the following raw JSON format ONLY with no other text
     """
 
     def generate(self, **kwargs) -> str:
@@ -521,7 +685,8 @@ class PlanGenerationPrompt(BasePrompt):
         Role: {context.role}
         Instructions: {context.instructions}
         AVAILABLE TOOLS:
-        {json.dumps(context.tool_signatures, indent=2)}"""
+        {', '.join(context.available_tools)}
+        """
 
         prompt += f"""
         Create a plan with intentional steps that are specific to the task and the tools available.
@@ -684,25 +849,6 @@ class TaskGoalEvaluationPrompt(BasePrompt):
         return prompt
 
 
-class ToolCallSystemPrompt(BasePrompt):
-    """Dynamic system prompt for tool calling generation."""
-
-    @property
-    def output_model(self) -> Optional[Type[BaseModel]]:
-        return ToolCallSystemOutput
-
-    def generate(self, **kwargs) -> str:
-        """Generate a system prompt for tool calling with dynamic tool signatures."""
-        context = self._get_prompt_context(**kwargs)
-        tool_signatures = kwargs.get("tool_signatures", context.tool_signatures)
-        max_calls = kwargs.get("max_calls", 1)
-        task = kwargs.get("task", context.task)
-
-        prompt = f"""Role: Tool Selection and configuration Expert\nObjective: Create {max_calls} tool call(s) for the given task using the available tool signatures\n\nGuidelines:\n- The tool call must adhere to the specific task\n- Use the tool signatures to effectively create tool calls that align with the task\n- Use the context provided in conjunction with the tool signatures to create tool calls that align with the task\n- Only use valid parameters and valid parameter data types and avoid using tool signatures that are not available\n- Check all data types are correct based on the tool signatures provided in available tools to avoid issues when the tool is used\n- Pay close attention to the signatures and parameters provided\n- Do not try to consolidate multiple tool calls into one call\n- Do not try to use tools that are not available\n\nTask: {task}\n\nAvailable Tool signatures: {tool_signatures}"""
-
-        return prompt
-
-
 class MemorySummarizationPrompt(BasePrompt):
     """Dynamic prompt for memory summarization."""
 
@@ -725,37 +871,6 @@ class MemorySummarizationPrompt(BasePrompt):
             prompt = f"""Summarize this tool result memory in 1 sentence. Focus on:\n1. What tool was used\n2. Key data or result obtained\n\nMemory content:\n{memory_content}\n\nProvide a concise summary:"""
         else:
             prompt = f"""Summarize this {memory_type} memory in 1-2 sentences. Focus on the most important information:\n\nMemory content:\n{memory_content}\n\nProvide a concise summary:"""
-
-        return prompt
-
-
-class OllamaManualToolPrompt(BasePrompt):
-    """Dynamic prompt for Ollama manual tool calling generation."""
-
-    @property
-    def output_model(self) -> Optional[Type[BaseModel]]:
-        return ToolCallSystemOutput
-
-    def generate(self, **kwargs) -> str:
-        """Generate a system prompt for manual tool calling with Ollama models."""
-        context = self._get_prompt_context(**kwargs)
-        tool_signatures = kwargs.get("tool_signatures", context.tool_signatures)
-        max_calls = kwargs.get("max_calls", 1)
-        task = kwargs.get("task", context.task)
-
-        prompt = f"""Role: Tool Selection and configuration Expert
-        Objective: Create {max_calls} tool call(s) for the task: {task} using the available tool signatures
-        Guidelines:
-        - The tool call must adhere to the specific task
-        - Use the tool signatures to effectively create tool calls that align with the task
-        - Use the context provided in conjunction with the tool signatures to create tool calls that align with the task
-        - Only use valid parameters and valid parameter data types and avoid using tool signatures that are not available
-        - Check all data types are correct based on the tool signatures provided in available tools to avoid issues when the tool is used
-        - Pay close attention to the signatures and parameters provided
-        - Do not try to consolidate multiple tool calls into one call
-        - Do not try to use tools that are not available
-        
-        Available Tool signatures: {json.dumps(tool_signatures, indent=2)}"""
 
         return prompt
 
