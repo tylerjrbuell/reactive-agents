@@ -1,9 +1,10 @@
-from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING, NamedTuple
 import time
 import json
 import asyncio
 import inspect
 from pydantic import BaseModel, Field
+from dataclasses import dataclass
 from reactive_agents.core.types.confirmation_types import ConfirmationCallbackProtocol
 from reactive_agents.core.types.event_types import AgentStateEvent
 from reactive_agents.core.tools.base import Tool
@@ -23,16 +24,39 @@ from reactive_agents.core.tools.tool_confirmation import ToolConfirmation
 from reactive_agents.core.tools.tool_validator import ToolValidator
 from reactive_agents.core.tools.tool_executor import ToolExecutor
 
+# Import ContextProtocol at runtime so Pydantic can resolve the forward reference
+from reactive_agents.core.context.context_protocol import ContextProtocol
+
 if TYPE_CHECKING:
-    from reactive_agents.core.context.agent_context import AgentContext
+    pass
+
+
+@dataclass
+class ParallelToolResult:
+    """Result of a parallel tool execution.
+
+    Attributes:
+        tool_name: Name of the tool that was executed
+        tool_call_id: Optional ID from the original tool call for correlation
+        result: The result of the tool execution (string, list, or None)
+        success: Whether the tool execution was successful
+        error: Error message if the execution failed
+        execution_time: Time taken to execute the tool in seconds
+    """
+    tool_name: str
+    tool_call_id: Optional[str]
+    result: Union[str, List[str], None]
+    success: bool
+    error: Optional[str] = None
+    execution_time: float = 0.0
 
 
 class ToolManager(BaseModel):
     """Orchestrates tool discovery, execution, caching, and validation using SOLID components."""
 
-    context: Optional["AgentContext"] = Field(
+    context: Optional["ContextProtocol"] = Field(
         default=None, exclude=True
-    )  # Reference back to the main context
+    )  # Reference back to the context
 
     # State
     tools: List[Tool] = Field(default_factory=list)
@@ -122,8 +146,10 @@ class ToolManager(BaseModel):
         self.tool_signatures = []
         # Load MCP tools if available
         if self.context and self.context.mcp_client:
-            # Ensure MCP client tools are loaded (might need await if not already done)
-            # Assuming mcp_client.tools and mcp_client.tool_signatures are populated
+            # Fetch tools from MCP servers
+            await self.context.mcp_client.get_tools()
+
+            # Get the tools that were just fetched
             mcp_tools = getattr(self.context.mcp_client, "tools", [])
             mcp_wrapped_tools = [
                 MCPToolWrapper(t, self.context.mcp_client) for t in mcp_tools
@@ -223,6 +249,171 @@ class ToolManager(BaseModel):
         self.guard.record_use(tool_name)
 
         return result
+
+    async def execute_tools_parallel(
+        self, tool_calls: List[Dict[str, Any]]
+    ) -> List[ParallelToolResult]:
+        """Execute multiple tool calls in parallel using asyncio.gather().
+
+        This method enables concurrent execution of independent tools, improving
+        performance when multiple tools can run simultaneously. Each tool execution
+        is isolated - one tool failure does not affect others.
+
+        Args:
+            tool_calls: List of tool call dictionaries, each containing:
+                - function: Dict with 'name' and 'arguments' keys
+                - id: Optional tool call ID for correlation
+
+        Returns:
+            List of ParallelToolResult objects in the same order as input tool_calls.
+            Each result contains success status, result/error, and execution time.
+
+        Example:
+            tool_calls = [
+                {"id": "call_1", "function": {"name": "search", "arguments": {"query": "python"}}},
+                {"id": "call_2", "function": {"name": "fetch", "arguments": {"url": "example.com"}}},
+            ]
+            results = await tool_manager.execute_tools_parallel(tool_calls)
+            for result in results:
+                if result.success:
+                    print(f"{result.tool_name}: {result.result}")
+                else:
+                    print(f"{result.tool_name} failed: {result.error}")
+        """
+        if not tool_calls:
+            return []
+
+        if self.tool_logger:
+            tool_names = [
+                tc.get("function", {}).get("name", "unknown") for tc in tool_calls
+            ]
+            self.tool_logger.info(
+                f"Starting parallel execution of {len(tool_calls)} tools: {tool_names}"
+            )
+
+        # Create coroutines for each tool call
+        async def execute_single_tool(
+            tool_call: Dict[str, Any], index: int
+        ) -> ParallelToolResult:
+            """Execute a single tool with isolated error handling."""
+            start_time = time.time()
+            tool_call_id = tool_call.get("id")
+            tool_name = tool_call.get("function", {}).get("name", "unknown")
+
+            try:
+                # Use existing use_tool method which handles guards, caching, etc.
+                result = await self.use_tool(tool_call)
+                execution_time = time.time() - start_time
+
+                # Determine success based on result content
+                is_success = result is not None and not (
+                    isinstance(result, str) and result.startswith("Error")
+                )
+
+                return ParallelToolResult(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    result=result,
+                    success=is_success,
+                    error=result if not is_success else None,
+                    execution_time=execution_time,
+                )
+
+            except Exception as e:
+                execution_time = time.time() - start_time
+                error_msg = f"Parallel execution error for {tool_name}: {str(e)}"
+
+                if self.tool_logger:
+                    self.tool_logger.error(error_msg)
+
+                # Emit failure event
+                if self.context:
+                    self.context.emit_event(
+                        AgentStateEvent.TOOL_FAILED,
+                        {
+                            "tool_name": tool_name,
+                            "parameters": tool_call.get("function", {}).get(
+                                "arguments", {}
+                            ),
+                            "error": error_msg,
+                        },
+                    )
+
+                return ParallelToolResult(
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    result=None,
+                    success=False,
+                    error=error_msg,
+                    execution_time=execution_time,
+                )
+
+        # Execute all tools concurrently
+        # return_exceptions=False means we rely on our try/except in execute_single_tool
+        tasks = [
+            execute_single_tool(tool_call, i) for i, tool_call in enumerate(tool_calls)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Log summary
+        if self.tool_logger:
+            successful = sum(1 for r in results if r.success)
+            failed = len(results) - successful
+            total_time = sum(r.execution_time for r in results)
+            self.tool_logger.info(
+                f"Parallel execution complete: {successful} succeeded, {failed} failed, "
+                f"total execution time: {total_time:.2f}s"
+            )
+
+        return list(results)
+
+    async def execute_tool_safe(
+        self, tool_call: Dict[str, Any]
+    ) -> ParallelToolResult:
+        """Execute a single tool with comprehensive error handling.
+
+        This is a convenience wrapper around use_tool that always returns a
+        ParallelToolResult, making it easier to handle results uniformly.
+
+        Args:
+            tool_call: Tool call dictionary with 'function' containing 'name' and 'arguments'
+
+        Returns:
+            ParallelToolResult with execution details
+        """
+        start_time = time.time()
+        tool_call_id = tool_call.get("id")
+        tool_name = tool_call.get("function", {}).get("name", "unknown")
+
+        try:
+            result = await self.use_tool(tool_call)
+            execution_time = time.time() - start_time
+
+            is_success = result is not None and not (
+                isinstance(result, str) and result.startswith("Error")
+            )
+
+            return ParallelToolResult(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                result=result,
+                success=is_success,
+                error=result if not is_success else None,
+                execution_time=execution_time,
+            )
+
+        except Exception as e:
+            execution_time = time.time() - start_time
+            error_msg = f"Tool execution error: {str(e)}"
+
+            return ParallelToolResult(
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                result=None,
+                success=False,
+                error=error_msg,
+                execution_time=execution_time,
+            )
 
     async def _actually_call_tool(
         self, tool_call: Dict[str, Any]

@@ -160,12 +160,16 @@ class MCPClient:
                 # Initialize and store session
                 await session.initialize()
                 self.sessions[server_name] = session
-                self.server_tools[server_name] = (await session.list_tools()).tools
+                tools_list = (await session.list_tools()).tools
+                self.server_tools[server_name] = tools_list
+                self.logger.info(f"Successfully connected to {server_name} with {len(tools_list)} tools")
 
             except Exception as e:
                 self.logger.error(
                     f"Failed to connect to server {server_name}: {str(e)}"
                 )
+                import traceback
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
                 # Clean up any partial connections
                 if server_name in self.sessions:
                     del self.sessions[server_name]
@@ -179,6 +183,7 @@ class MCPClient:
 
     async def get_tools(self):
         """Get all available tools from connected servers"""
+        self.logger.info(f"get_tools() called. Closed: {self._closed}, Sessions: {len(self.sessions)}")
         if not self._closed:
             self.tools = []
             self.tool_signatures = []

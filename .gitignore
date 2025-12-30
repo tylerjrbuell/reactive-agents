@@ -9,3 +9,7 @@ reactive_agents/agent_mcp/agent.db
 CLAUDE.md
 .serena
 provider_analysis_*
+.venv
+
+# MkDocs documentation build output
+site/

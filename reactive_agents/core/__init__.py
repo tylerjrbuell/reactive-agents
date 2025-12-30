@@ -12,6 +12,9 @@ from .engine import (
     AgentContext,
 )
 
+# Configuration
+from .config import AgentConfig
+
 # Event system
 from .events import (
     EventSubscription,
@@ -100,6 +103,8 @@ __all__ = [
     "TaskClassifier",
     "MetricsManager",
     "AgentContext",
+    # Configuration
+    "AgentConfig",
     # Events
     "EventSubscription",
     "EventBus",

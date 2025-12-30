@@ -1,4 +1,18 @@
+"""
+AgentContext: Runtime state container for reactive agents.
+
+This module provides a slim runtime state container that holds:
+- An AgentConfig reference (immutable configuration)
+- Pre-built component references (injected via factory)
+- Session state (mutable runtime data)
+- Delegation properties for backward compatibility
+
+By separating configuration (AgentConfig) from runtime state (AgentContext),
+we achieve cleaner architecture and better separation of concerns.
+"""
+
 from __future__ import annotations
+
 from typing import (
     List,
     Dict,
@@ -6,32 +20,25 @@ from typing import (
     Literal,
     Optional,
     Callable,
-    Sequence,
     Awaitable,
     Union,
     Tuple,
-    Set,
 )
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
 import time
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
-
 
 if TYPE_CHECKING:
     from reactive_agents.core.reasoning.engine import ReasoningEngine
     from reactive_agents.app.agents.reactive_agent import ReactiveAgent
     from reactive_agents.app.agents.base import Agent
+    from reactive_agents.core.factory.component_set import ComponentSet
 
 from reactive_agents.config.mcp_config import MCPConfig
 from reactive_agents.utils.logging import Logger
 from reactive_agents.providers.llm.base import BaseModelProvider
 from reactive_agents.providers.external.client import MCPClient
-from reactive_agents.core.reasoning.prompts.agent_prompts import (
-    REACT_AGENT_SYSTEM_PROMPT,
-    CONTEXT_SUMMARIZATION_PROMPT,
-)
 from reactive_agents.core.types.status_types import TaskStatus
 
 # --- Import Manager Classes ---
@@ -39,7 +46,6 @@ from reactive_agents.core.metrics.metrics_manager import MetricsManager
 from reactive_agents.core.memory.memory_manager import MemoryManager
 from reactive_agents.core.memory.vector_memory import VectorMemoryManager
 
-# ReflectionManager is no longer used with simplified infrastructure
 from reactive_agents.core.workflows.workflow_manager import WorkflowManager
 from reactive_agents.core.tools.tool_manager import ToolManager
 
@@ -50,73 +56,93 @@ from reactive_agents.core.types.session_types import AgentSession
 from reactive_agents.core.events.event_bus import EventBus
 from reactive_agents.core.types.event_types import AgentStateEvent
 
-import tiktoken
-
 # Add imports for new components
 from reactive_agents.core.reasoning.task_classifier import TaskClassifier
-from reactive_agents.config.settings import get_settings
 from reactive_agents.core.context.context_manager import ContextManager
 
+# Import AgentConfig
+from reactive_agents.core.config.agent_config import AgentConfig
 
-# Now define AgentContext
+
 class AgentContext(BaseModel):
-    """Centralized context holding configuration and components for an agent."""
+    """
+    Runtime state container for reactive agents.
 
-    # Core Agent Configuration
-    agent_name: str
-    provider_model_name: str
-    instructions: str = ""
-    role: str = ""
-    role_instructions: Dict[str, Any] = {}
+    This class holds runtime state and component references, NOT configuration.
+    Configuration is stored in the immutable AgentConfig and accessed via
+    delegation properties for backward compatibility.
 
-    # --- Workflow Context and Dependencies ---
+    Attributes:
+        config: Immutable configuration reference
+        session: Mutable session state for the current run
+
+        Component references (injected via factory or initialized):
+        - model_provider, tool_manager, memory_manager, etc.
+
+        Runtime state fields:
+        - tools, mcp_client, mcp_config, etc.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # =========================================================================
+    # Configuration (immutable reference)
+    # =========================================================================
+    config: AgentConfig
+
+    # =========================================================================
+    # Session State (mutable runtime)
+    # =========================================================================
+    session: AgentSession = Field(default_factory=lambda: AgentSession(
+        initial_task="",
+        current_task="",
+        start_time=time.time(),
+        task_status=TaskStatus.INITIALIZED,
+        reasoning_log=[],
+        task_progress=[],
+        task_nudges=[],
+        successful_tools=set(),
+        metrics={},
+        completion_score=0.0,
+        tool_usage_score=0.0,
+        progress_score=0.0,
+        answer_quality_score=0.0,
+        llm_evaluation_score=0.0,
+        instruction_adherence_score=0.0,
+    ))
+
+    # =========================================================================
+    # Component References (injected, not created here)
+    # =========================================================================
+    model_provider: Optional[BaseModelProvider] = None
+    tool_manager: Optional[ToolManager] = None
+    memory_manager: Optional[Union[MemoryManager, VectorMemoryManager]] = None
+    metrics_manager: Optional[MetricsManager] = None
+    workflow_manager: Optional[WorkflowManager] = None
+    context_manager: Optional[ContextManager] = None
+    event_bus: Optional[EventBus] = None
+    task_classifier: Optional[TaskClassifier] = None
+
+    # Loggers
+    agent_logger: Optional[Logger] = None
+    tool_logger: Optional[Logger] = None
+    result_logger: Optional[Logger] = None
+
+    # =========================================================================
+    # Runtime State Fields (mutable, not in config)
+    # =========================================================================
+    # Workflow context (shared between agents in a workflow)
     workflow_context_shared: Optional[Dict[str, Any]] = None
-    workflow_dependencies: List[str] = []
+    workflow_dependencies: List[str] = Field(default_factory=list)
 
-    # Configuration Flags & Settings (Remain in Context)
-    tool_use_enabled: bool = True
-    reflect_enabled: bool = False
-    use_memory_enabled: bool = True
-    collect_metrics_enabled: bool = True
+    # MCP (Model Context Protocol) runtime state
+    mcp_client: Optional[MCPClient] = None
+    mcp_config: Optional[MCPConfig] = None
 
-    # Vector Memory Configuration
-    vector_memory_enabled: bool = False
-    vector_memory_collection: Optional[str] = None
-    min_completion_score: float = 1.0
-    max_iterations: Optional[int] = None
-    max_task_retries: int = 3
-    log_level: Literal["debug", "info", "warning", "error", "critical"] = "info"
-    enable_caching: bool = True
-    cache_ttl: int = 3600
-    offline_mode: bool = False
+    # Tools list (custom tools added at runtime)
+    tools: List[Any] = Field(default_factory=list)
 
-    # Context Management Configuration
-    max_context_messages: int = 20
-    max_context_tokens: Optional[int] = None
-    enable_context_pruning: bool = True
-    enable_context_summarization: bool = True
-    context_pruning_strategy: Literal["conservative", "balanced", "aggressive"] = (
-        "balanced"
-    )
-    # --- New Configurable Context Management Options ---
-    context_token_budget: int = 4000
-    context_pruning_aggressiveness: Literal[
-        "conservative", "balanced", "aggressive"
-    ] = "balanced"
-    context_summarization_frequency: int = 3  # N iterations between summarizations
-
-    # Response Format Configuration
-    response_format: Optional[str] = None
-
-    retry_config: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "max_retries": 3,
-            "base_delay": 1.0,
-            "max_delay": 10.0,
-            "retry_network_errors": True,
-        }
-    )
-    check_tool_feasibility: bool = True
+    # Confirmation callback for tool execution
     confirmation_callback: Optional[
         Callable[
             [str, Dict[str, Any]], Awaitable[Union[bool, Tuple[bool, Optional[str]]]]
@@ -124,168 +150,270 @@ class AgentContext(BaseModel):
     ] = None
     confirmation_config: Optional[Dict[str, Any]] = None
 
-    # Core Components (Remain in Context)
-    model_provider: Optional[BaseModelProvider] = None
-    model_provider_options: Optional[Dict[str, Any]] = None
-    mcp_client: Optional[MCPClient] = None
-    mcp_config: Optional[MCPConfig] = None
-    tools: List[Any] = Field(default_factory=list)
-    # Loggers (Remain in Context)
-    agent_logger: Optional[Logger] = None
-    tool_logger: Optional[Logger] = None
-    result_logger: Optional[Logger] = None
+    # Observability (optional)
+    observability: Optional[Any] = None
 
-    # Component Managers (Remain in Context)
-    metrics_manager: Optional["MetricsManager"] = None
-    memory_manager: Optional[Union["MemoryManager", "VectorMemoryManager"]] = None
-    workflow_manager: Optional["WorkflowManager"] = None
-    tool_manager: Optional["ToolManager"] = None
-    context_manager: Optional["ContextManager"] = None
-
-    # --- Add Event Bus ---
-    event_bus: Optional[EventBus] = None
-    enable_state_observation: bool = True
-
-    # Observability
-    observability: Optional[Any] = Field(default=None)  # ContextObservabilityManager
-
-    # Tool use policy: controls when tools are allowed in the agent loop
-    tool_use_policy: Literal["always", "required_only", "adaptive", "never"] = (
-        "adaptive"
-    )
-
-    # Maximum consecutive tool calls before forcing reflection/summary (used in adaptive tool use policy)
-    tool_use_max_consecutive_calls: int = 3
-
-    # New reasoning and classification components
-    task_classifier: Optional["TaskClassifier"] = None
-    reasoning_strategy: str = "reactive"
-    enable_reactive_execution: bool = True
-    enable_dynamic_strategy_switching: bool = True
-
-    # Private attributes
-    _agent: Optional["ReactiveAgent"] = (
-        None  # Reference to the agent instance for strategies
-    )
-    _reasoning_engine: Optional[Any] = None  # Lazy-loaded reasoning engine
-
-    @staticmethod
-    def _create_default_session() -> AgentSession:
-        return AgentSession(
-            initial_task="",
-            current_task="",
-            start_time=time.time(),
-            task_status=TaskStatus.INITIALIZED,
-            reasoning_log=[],
-            task_progress=[],
-            task_nudges=[],
-            successful_tools=set(),
-            metrics={},
-            completion_score=0.0,
-            tool_usage_score=0.0,
-            progress_score=0.0,
-            answer_quality_score=0.0,
-            llm_evaluation_score=0.0,
-            instruction_adherence_score=0.0,
-        )
-
-    # Session State Holder (Reference to the current run's state)
-    session: AgentSession = Field(default_factory=_create_default_session)
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # =========================================================================
+    # Private Attributes
+    # =========================================================================
+    _agent: Optional["ReactiveAgent"] = PrivateAttr(default=None)
+    _reasoning_engine: Optional[Any] = PrivateAttr(default=None)
 
     def __init__(self, **data):
-        # Call Pydantic's __init__ first to set up fields correctly
+        """Initialize AgentContext with config and optional components."""
         super().__init__(**data)
 
-        # Initialize observability manager
-        # Remove initialization of observability field
+        # Set agent name on session
+        self.session.agent_name = self.config.agent_name
 
-        # Now, initialize components and managers *after* super().__init__
-        self._initialize_loggers()
-        assert self.agent_logger is not None
-        self._initialize_model_provider()
-
-        # --- Initialize Managers ---
-        # Pydantic already initialized managers to None based on Optional type hint
-        if self.collect_metrics_enabled:
-            self.metrics_manager = MetricsManager(context=self)
-
-        self.tool_manager = ToolManager(context=self)
-
-        if self.use_memory_enabled:
-            if self.vector_memory_enabled:
-                self.agent_logger.info(
-                    f"Initializing memory manager for {self.agent_name} with vector memory enabled"
-                )
-                # Import here to avoid circular imports
-                from reactive_agents.core.memory.vector_memory import (
-                    VectorMemoryManager,
-                    VectorMemoryConfig,
-                )
-                from reactive_agents.config.settings import get_settings
-
-                # Get settings for vector memory persist directory
-                settings = get_settings()
-                vector_persist_dir = str(settings.get_vector_memory_path())
-
-                # Create vector memory configuration
-                vector_config = VectorMemoryConfig(
-                    collection_name=self.vector_memory_collection
-                    or self.agent_name.replace(" ", "_").lower(),
-                    persist_directory=vector_persist_dir,
-                )
-
-                self.memory_manager = VectorMemoryManager(
-                    context=self, config=vector_config
-                )
-                self.agent_logger.info(
-                    f"Initialized vector memory with collection: {vector_config.collection_name}"
-                )
-            else:
-                self.agent_logger.info(
-                    f"Initializing memory manager for {self.agent_name} with json memory enabled"
-                )
-                self.memory_manager = MemoryManager(context=self)
-        else:
-            self.agent_logger.info(f"Memory manager disabled for {self.agent_name}")
-            self.memory_manager = None
-
-        # Reflection is now handled by the simplified infrastructure
-
-        self.workflow_manager = WorkflowManager(
-            context=self,
-            workflow_context=self.workflow_context_shared,
-            workflow_dependencies=self.workflow_dependencies,
-        )
-
-        # Initialize new components
-        if self.enable_reactive_execution:
-            self.task_classifier = TaskClassifier(context=self)
-
-        # Initialize context manager
-        self.context_manager = ContextManager(agent_context=self)
-        self.agent_logger.info("Context manager initialized.")
-
-        # Initialize event bus if enabled
-        if self.enable_state_observation:
-            self.event_bus = EventBus(self.agent_name)
-            self.agent_logger.info("Event bus initialized.")
-
-        # --- End Initialize Managers ---
-
-        # Set agent name
-        self.session.agent_name = self.agent_name
-
-        # Initialize current task
+        # Initialize current task from initial task if not set
         if not self.session.current_task and self.session.initial_task:
             self.session.current_task = self.session.initial_task
 
-        self.agent_logger.info(
-            f"AgentContext for '{self.agent_name}' initialized with managers."
-        )
+    def inject_components(self, components: "ComponentSet") -> None:
+        """
+        Inject initialized components from the ComponentFactory.
 
-    # === Event System ===
+        This method is called after the context is created to inject
+        pre-built components. This separates component creation from
+        context initialization, enabling better testing and modularity.
+
+        Args:
+            components: A ComponentSet containing all initialized components
+        """
+        self.agent_logger = components.agent_logger
+        self.tool_logger = components.tool_logger
+        self.result_logger = components.result_logger
+        self.model_provider = components.model_provider
+        self.event_bus = components.event_bus
+        self.tool_manager = components.tool_manager
+        self.memory_manager = components.memory_manager
+        self.metrics_manager = components.metrics_manager
+        self.workflow_manager = components.workflow_manager
+        self.context_manager = components.context_manager
+        self.task_classifier = components.task_classifier
+
+    def _initialize_loggers(self) -> None:
+        """
+        Initialize loggers if they haven't been injected.
+
+        This method provides backward compatibility for code that creates
+        AgentContext without using ComponentFactory. It creates basic loggers
+        using the config values.
+
+        Note: When using the builder pattern with ComponentFactory, loggers
+        are injected via inject_components() and this method is not needed.
+        """
+        if self.agent_logger is None:
+            self.agent_logger = Logger(
+                name=self.config.agent_name,
+                type="agent",
+                level=self.config.log_level,
+            )
+
+        if self.tool_logger is None:
+            self.tool_logger = Logger(
+                name=f"{self.config.agent_name} Tool",
+                type="tool",
+                level=self.config.log_level,
+            )
+
+        if self.result_logger is None:
+            self.result_logger = Logger(
+                name=f"{self.config.agent_name} Result",
+                type="agent_response",
+                level=self.config.log_level,
+            )
+
+    # =========================================================================
+    # Delegation Properties for Backward Compatibility
+    # These allow existing code using context.agent_name to still work
+    # =========================================================================
+
+    @property
+    def agent_name(self) -> str:
+        """Delegate to config.agent_name."""
+        return self.config.agent_name
+
+    @property
+    def provider_model_name(self) -> str:
+        """Delegate to config.provider_model_name."""
+        return self.config.provider_model_name
+
+    @property
+    def instructions(self) -> str:
+        """Delegate to config.instructions."""
+        return self.config.instructions
+
+    @property
+    def role(self) -> str:
+        """Delegate to config.role."""
+        return self.config.role
+
+    @property
+    def role_instructions(self) -> Dict[str, Any]:
+        """Delegate to config.role_instructions."""
+        return self.config.role_instructions
+
+    @property
+    def tool_use_enabled(self) -> bool:
+        """Delegate to config.tool_use_enabled."""
+        return self.config.tool_use_enabled
+
+    @property
+    def reflect_enabled(self) -> bool:
+        """Delegate to config.reflect_enabled."""
+        return self.config.reflect_enabled
+
+    @property
+    def use_memory_enabled(self) -> bool:
+        """Delegate to config.use_memory_enabled."""
+        return self.config.use_memory_enabled
+
+    @property
+    def collect_metrics_enabled(self) -> bool:
+        """Delegate to config.collect_metrics_enabled."""
+        return self.config.collect_metrics_enabled
+
+    @property
+    def vector_memory_enabled(self) -> bool:
+        """Delegate to config.vector_memory_enabled."""
+        return self.config.vector_memory_enabled
+
+    @property
+    def enable_state_observation(self) -> bool:
+        """Delegate to config.enable_state_observation."""
+        return self.config.enable_state_observation
+
+    @property
+    def enable_reactive_execution(self) -> bool:
+        """Delegate to config.enable_reactive_execution."""
+        return self.config.enable_reactive_execution
+
+    @property
+    def enable_dynamic_strategy_switching(self) -> bool:
+        """Delegate to config.enable_dynamic_strategy_switching."""
+        return self.config.enable_dynamic_strategy_switching
+
+    @property
+    def enable_context_pruning(self) -> bool:
+        """Delegate to config.enable_context_pruning."""
+        return self.config.enable_context_pruning
+
+    @property
+    def enable_context_summarization(self) -> bool:
+        """Delegate to config.enable_context_summarization."""
+        return self.config.enable_context_summarization
+
+    @property
+    def enable_caching(self) -> bool:
+        """Delegate to config.enable_caching."""
+        return self.config.enable_caching
+
+    @property
+    def max_iterations(self) -> Optional[int]:
+        """Delegate to config.max_iterations."""
+        return self.config.max_iterations
+
+    @property
+    def max_task_retries(self) -> int:
+        """Delegate to config.max_task_retries."""
+        return self.config.max_task_retries
+
+    @property
+    def log_level(self) -> Literal["debug", "info", "warning", "error", "critical"]:
+        """Delegate to config.log_level."""
+        return self.config.log_level
+
+    @property
+    def min_completion_score(self) -> float:
+        """Delegate to config.min_completion_score."""
+        return self.config.min_completion_score
+
+    @property
+    def cache_ttl(self) -> int:
+        """Delegate to config.cache_ttl."""
+        return self.config.cache_ttl
+
+    @property
+    def offline_mode(self) -> bool:
+        """Delegate to config.offline_mode."""
+        return self.config.offline_mode
+
+    @property
+    def max_context_messages(self) -> int:
+        """Delegate to config.max_context_messages."""
+        return self.config.max_context_messages
+
+    @property
+    def max_context_tokens(self) -> Optional[int]:
+        """Delegate to config.max_context_tokens."""
+        return self.config.max_context_tokens
+
+    @property
+    def context_pruning_strategy(self) -> Literal["conservative", "balanced", "aggressive"]:
+        """Delegate to config.context_pruning_strategy."""
+        return self.config.context_pruning_strategy
+
+    @property
+    def context_token_budget(self) -> Optional[int]:
+        """Delegate to config.context_token_budget."""
+        return self.config.context_token_budget
+
+    @property
+    def context_pruning_aggressiveness(self) -> float:
+        """Delegate to config.context_pruning_aggressiveness."""
+        return self.config.context_pruning_aggressiveness
+
+    @property
+    def context_summarization_frequency(self) -> int:
+        """Delegate to config.context_summarization_frequency."""
+        return self.config.context_summarization_frequency
+
+    @property
+    def response_format(self) -> Optional[str]:
+        """Delegate to config.response_format."""
+        return self.config.response_format
+
+    @property
+    def reasoning_strategy(self) -> str:
+        """Delegate to config.reasoning_strategy."""
+        return self.config.reasoning_strategy
+
+    @property
+    def tool_use_policy(self) -> Literal["always", "required_only", "adaptive", "never"]:
+        """Delegate to config.tool_use_policy."""
+        return self.config.tool_use_policy
+
+    @property
+    def tool_use_max_consecutive_calls(self) -> int:
+        """Delegate to config.tool_use_max_consecutive_calls."""
+        return self.config.tool_use_max_consecutive_calls
+
+    @property
+    def check_tool_feasibility(self) -> bool:
+        """Delegate to config.check_tool_feasibility."""
+        return self.config.check_tool_feasibility
+
+    @property
+    def vector_memory_collection(self) -> Optional[str]:
+        """Delegate to config.vector_memory_collection."""
+        return self.config.vector_memory_collection
+
+    @property
+    def retry_config(self) -> Dict[str, Any]:
+        """Delegate to config.retry_config."""
+        return self.config.retry_config
+
+    @property
+    def model_provider_options(self) -> Dict[str, Any]:
+        """Delegate to config.model_provider_options."""
+        return self.config.model_provider_options
+
+    # =========================================================================
+    # Event System
+    # =========================================================================
+
     def emit_event(self, event_type: AgentStateEvent, data: Dict[str, Any]) -> None:
         """
         Emit an event to all registered callbacks.
@@ -330,69 +458,89 @@ class AgentContext(BaseModel):
             event_data = {**context_data, **data}
             await self.event_bus.emit_async(event_type, event_data)
 
-    # Methods to interact with components will be added later
-    # e.g., get_tools(), update_metrics(), save_memory(), get_reflection() etc.
+    # =========================================================================
+    # Accessor Methods
+    # =========================================================================
 
     async def close(self):
         """Safely close resources like the MCP client."""
-        assert self.agent_logger is not None
-        self.agent_logger.info(f"Closing context for {self.agent_name}...")
-        # TODO: Add any other closing responsibilities for context
-        self.agent_logger.info(f"{self.agent_name} context closed successfully.")
+        if self.agent_logger:
+            self.agent_logger.info(f"Closing context for {self.agent_name}...")
+            self.agent_logger.info(f"{self.agent_name} context closed successfully.")
 
-    # Convenience accessors (optional, direct access context.manager is also fine)
-    def get_logger(self):
+    def get_logger(self) -> Logger:
+        """Get the agent logger."""
         if not self.agent_logger:
             raise RuntimeError("Logger is not initialized in this context.")
         return self.agent_logger
 
-    def get_model_provider(self):
+    def get_tool_logger(self) -> Logger:
+        """Get the tool logger."""
+        if not self.tool_logger:
+            raise RuntimeError("Tool logger is not initialized in this context.")
+        return self.tool_logger
+
+    def get_result_logger(self) -> Logger:
+        """Get the result logger."""
+        if not self.result_logger:
+            raise RuntimeError("Result logger is not initialized in this context.")
+        return self.result_logger
+
+    def get_model_provider(self) -> BaseModelProvider:
+        """Get the model provider."""
         if not self.model_provider:
             raise RuntimeError("ModelProvider is not initialized in this context.")
         return self.model_provider
 
-    def get_tool_manager(self):
+    def get_tool_manager(self) -> ToolManager:
+        """Get the tool manager."""
         if not self.tool_manager:
             raise RuntimeError("ToolManager is not initialized in this context.")
         return self.tool_manager
 
-    def get_memory_manager(self):
+    def get_memory_manager(self) -> Union[MemoryManager, VectorMemoryManager]:
+        """Get the memory manager."""
         if not self.memory_manager:
             raise RuntimeError("MemoryManager is not initialized in this context.")
         return self.memory_manager
 
     def get_reflection_manager(self):
+        """Get the reflection manager (deprecated, returns None)."""
         # Reflection is now handled by the simplified infrastructure
         return None
 
-    def get_workflow_manager(self):
+    def get_workflow_manager(self) -> WorkflowManager:
+        """Get the workflow manager."""
         if not self.workflow_manager:
             raise RuntimeError("WorkflowManager is not initialized in this context.")
         return self.workflow_manager
 
     @property
-    def reasoning_engine(self) -> ReasoningEngine:
+    def reasoning_engine(self) -> "ReasoningEngine":
         """Get the reasoning engine with lazy initialization."""
         if self._reasoning_engine is None:
             from reactive_agents.core.reasoning.engine import get_reasoning_engine
-
             self._reasoning_engine = get_reasoning_engine(self)
         return self._reasoning_engine
 
-    def get_reasoning_engine(self):
+    def get_reasoning_engine(self) -> "ReasoningEngine":
         """Get the reasoning engine (convenience method)."""
         return self.reasoning_engine
 
-    def get_tools(self):
+    def get_tools(self) -> List[Any]:
+        """Get available tools from the tool manager."""
         return self.tool_manager.get_available_tools() if self.tool_manager else []
 
-    def get_tool_names(self):
+    def get_tool_names(self) -> List[str]:
+        """Get names of available tools."""
         return self.tool_manager.get_available_tool_names() if self.tool_manager else []
 
-    def get_tool_signatures(self):
+    def get_tool_signatures(self) -> List[Any]:
+        """Get tool signatures."""
         return self.tool_manager.tool_signatures if self.tool_manager else []
 
-    def get_tool_by_name(self, name: str):
+    def get_tool_by_name(self, name: str) -> Optional[Any]:
+        """Get a tool by name."""
         if not self.tool_manager:
             return None
         for tool in self.tool_manager.tools:
@@ -400,29 +548,35 @@ class AgentContext(BaseModel):
                 return tool
         return None
 
-    def get_reflections(self):
+    def get_reflections(self) -> List[Any]:
+        """Get reflections (deprecated, returns empty list)."""
         # Reflection is now handled by the simplified infrastructure
         return []
 
-    def get_session_history(self):
+    def get_session_history(self) -> List[Any]:
+        """Get session history from memory manager."""
         if self.memory_manager and hasattr(self.memory_manager, "get_session_history"):
             return self.memory_manager.get_session_history()
         return []
 
-    def get_workflow_context(self):
+    def get_workflow_context(self) -> Optional[Dict[str, Any]]:
+        """Get workflow context from workflow manager."""
         if self.workflow_manager and hasattr(self.workflow_manager, "get_full_context"):
             return self.workflow_manager.get_full_context()
         return None
 
     def get_metrics(self) -> Dict[str, Any]:
+        """Get metrics from metrics manager."""
         if self.metrics_manager:
             return self.metrics_manager.get_metrics()
         return {}  # Return empty if metrics disabled
 
-    def has_completed_required_tools(self) -> tuple[bool, set[str]]:
+    def has_completed_required_tools(self) -> Tuple[bool, set]:
         """
-        Check if all required tools (min_required_tools) have been completed (i.e., are in successful_tools).
-        Returns a tuple (tools_completed: bool, missing_tools: set[str])
+        Check if all required tools have been completed.
+
+        Returns:
+            A tuple of (tools_completed: bool, missing_tools: set[str])
         """
         min_required_tools = self.session.min_required_tools or set()
         successful_tools = self.session.successful_tools
@@ -432,49 +586,6 @@ class AgentContext(BaseModel):
         tools_completed = len(missing_tools) == 0
         return tools_completed, missing_tools
 
-    def _initialize_loggers(self):
-        if not self.agent_logger:
-            self.agent_logger = Logger(
-                name=self.agent_name, type="agent", level=self.log_level
-            )
-        if not self.tool_logger:
-            self.tool_logger = Logger(
-                name=f"{self.agent_name} Tool", type="tool", level=self.log_level
-            )
-        if not self.result_logger:
-            self.result_logger = Logger(
-                name=f"{self.agent_name} Result",
-                type="agent_response",
-                level=self.log_level,
-            )
 
-    def _initialize_model_provider(self):
-        """Initialize the model provider."""
-        try:
-            from reactive_agents.providers.llm.factory import ModelProviderFactory
-
-            # Create model provider with options
-            self.model_provider = ModelProviderFactory.get_model_provider(
-                self.provider_model_name,
-                options=self.model_provider_options or {},
-                context=self,
-            )
-            if self.agent_logger:
-                self.agent_logger.info(
-                    f"Initialized model provider: {self.provider_model_name}"
-                )
-
-        except Exception as e:
-            if self.agent_logger:
-                self.agent_logger.error(f"Failed to initialize model provider: {e}")
-            raise RuntimeError(f"Model provider initialization failed: {e}")
-
-
-# --- Rebuild Models to Resolve Forward References ---
-# Call model_rebuild() on dependent models after AgentContext is defined
-# This allows them to correctly resolve the 'AgentContext' forward reference.
-MetricsManager.model_rebuild(force=True)
-MemoryManager.model_rebuild(force=True)
-WorkflowManager.model_rebuild(force=True)
-ToolManager.model_rebuild(force=True)
-# --- End Rebuild Models ---
+# Note: model_rebuild() calls are no longer needed with the new ComponentContext/ContextProtocol architecture
+# Components now accept either AgentContext or ComponentContext via the ContextProtocol interface

@@ -33,6 +33,11 @@ from reactive_agents.config.mcp_config import MCPConfig
 from reactive_agents.app.agents.reactive_agent import ReactiveAgent
 from reactive_agents.core.tools.base import Tool
 from reactive_agents.core.types.event_types import AgentStateEvent
+
+# Import new architecture components
+from reactive_agents.core.config.agent_config import AgentConfig
+from reactive_agents.core.factory.component_factory import ComponentFactory
+from reactive_agents.core.context.agent_context import AgentContext
 from reactive_agents.core.types.event_types import (
     SessionStartedEventData,
     SessionEndedEventData,
@@ -1174,11 +1179,20 @@ class ReactiveAgentBuilder:
     # Build method
     async def build(self) -> ReactiveAgent:
         """
-        Build and return a configured ReactiveAgent instance
+        Build and return a configured ReactiveAgent instance.
+
+        This method:
+        1. Handles optional builder prompt for dynamic configuration
+        2. Creates an AgentConfig from builder fields
+        3. Creates an AgentContext with the config
+        4. Uses ComponentFactory to create and wire all components
+        5. Injects components into the context
+        6. Creates and initializes the ReactiveAgent
 
         Returns:
             ReactiveAgent: A fully configured agent ready to use
         """
+        # Handle builder prompt for dynamic configuration (kept for backward compatibility)
         if self._config["builder_prompt"]:
             valid_dynamic_config_keys = [
                 "agent_name",
@@ -1190,7 +1204,7 @@ class ReactiveAgentBuilder:
                 "enable_caching",
                 "use_memory_enabled",
             ]
-            self._logger.info(f"Building agent from prompt...")
+            self._logger.info("Building agent from prompt...")
             from reactive_agents.providers.llm.factory import ModelProviderFactory
 
             model_provider = ModelProviderFactory.get_model_provider(
@@ -1225,7 +1239,6 @@ class ReactiveAgentBuilder:
             collection_name = (
                 self._vector_memory_collection or self._config["agent_name"]
             )
-            # Configure vector memory settings
             self._config["vector_memory_enabled"] = True
             self._config["vector_memory_collection"] = collection_name
             self._config["use_memory_enabled"] = True
@@ -1233,33 +1246,84 @@ class ReactiveAgentBuilder:
                 f"Vector memory enabled with collection: {collection_name}"
             )
 
-        # Add custom tools to the configuration
-        if self._custom_tools:
-            self._config["tools"] = self._custom_tools
-
         try:
-            # Create ReactiveAgentConfig and ReactiveAgent
-            agent_config = ReactiveAgentConfig(**self._config)
-            agent = ReactiveAgent(config=agent_config)
+            # =========================================================================
+            # Step 1: Create AgentConfig from builder fields
+            # =========================================================================
+            agent_config = self._create_agent_config()
+            self._logger.info(f"Created AgentConfig for agent: {agent_config.agent_name}")
+
+            # =========================================================================
+            # Step 2: Initialize MCP client if needed (before component creation)
+            # =========================================================================
+            mcp_client = await self._initialize_mcp_client()
+
+            # =========================================================================
+            # Step 3: Create AgentContext with config
+            # =========================================================================
+            context = AgentContext(config=agent_config)
+
+            # Set MCP client and config on context
+            if mcp_client:
+                context.mcp_client = mcp_client
+            if self._mcp_config:
+                context.mcp_config = self._mcp_config
+
+            # Set confirmation callback and config if provided
+            if self._config.get("confirmation_callback"):
+                context.confirmation_callback = self._config["confirmation_callback"]
+            if self._config.get("confirmation_config"):
+                context.confirmation_config = self._config["confirmation_config"]
+
+            # Set custom tools on context for tool manager to pick up
+            if self._custom_tools:
+                context.tools = self._custom_tools
+
+            # =========================================================================
+            # Step 4: Use ComponentFactory to create all components
+            # =========================================================================
+            components = await ComponentFactory.create_components(
+                config=agent_config,
+                mcp_client=mcp_client,
+                custom_tools=self._custom_tools if self._custom_tools else None,
+            )
+            self._logger.info(f"Created components: {components}")
+
+            # =========================================================================
+            # Step 5: Inject components into context
+            # =========================================================================
+            context.inject_components(components)
+            self._logger.info("Injected components into AgentContext")
+
+            # =========================================================================
+            # Step 6: Create ReactiveAgent with the configured context
+            # =========================================================================
+            # We still need ReactiveAgentConfig for ReactiveAgent constructor compatibility
+            # but we pass the pre-configured context so it won't recreate components
+            reactive_config = ReactiveAgentConfig(**self._config)
+            agent = ReactiveAgent(config=reactive_config, context=context)
+
+            # Initialize the agent (this will skip component creation since context is provided)
             await agent.initialize()
 
-            # Set up event callbacks if any were registered
+            # =========================================================================
+            # Step 7: Set up event callbacks if any were registered
+            # =========================================================================
             if hasattr(self, "_event_callbacks"):
                 for event_type, callbacks in self._event_callbacks.items():
                     for callback in callbacks:
-                        # Register with the agent's event bus
                         if hasattr(agent, "_event_bus") and agent._event_bus:
                             agent._event_bus.register_callback(event_type, callback)
 
             if hasattr(self, "_async_event_callbacks"):
                 for event_type, callbacks in self._async_event_callbacks.items():
                     for callback in callbacks:
-                        # Register async callbacks with the agent's event bus
                         if hasattr(agent, "_event_bus") and agent._event_bus:
                             agent._event_bus.register_async_callback(
                                 event_type, callback
                             )
 
+            self._logger.info(f"Successfully built ReactiveAgent: {agent_config.agent_name}")
             return agent
 
         except Exception as e:
@@ -1268,8 +1332,134 @@ class ReactiveAgentBuilder:
                 try:
                     await self._mcp_client.close()
                 except Exception as cleanup_error:
-                    print(
+                    self._logger.error(
                         f"Error closing MCP client during error handling: {cleanup_error}"
                     )
 
             raise RuntimeError(f"Failed to create ReactiveAgent: {e}") from e
+
+    def _create_agent_config(self) -> AgentConfig:
+        """
+        Create an AgentConfig from the builder's configuration dictionary.
+
+        This method maps builder fields to AgentConfig fields, handling
+        any necessary transformations.
+
+        Returns:
+            AgentConfig: The immutable configuration object
+        """
+        # Map builder config keys to AgentConfig fields
+        # Note: AgentConfig has specific field names that may differ from builder config
+        config_mapping = {
+            # Core Identity
+            "agent_name": self._config.get("agent_name", "ReactiveAgent"),
+            "provider_model_name": self._config.get("provider_model_name", "ollama:cogito:14b"),
+            "instructions": self._config.get("instructions", ""),
+            "role": self._config.get("role", ""),
+            "role_instructions": self._config.get("role_instructions", {}),
+
+            # Feature Flags
+            "tool_use_enabled": self._config.get("tool_use_enabled", True),
+            "reflect_enabled": self._config.get("reflect_enabled", False),
+            "use_memory_enabled": self._config.get("use_memory_enabled", True),
+            "collect_metrics_enabled": self._config.get("collect_metrics_enabled", True),
+            "vector_memory_enabled": self._config.get("vector_memory_enabled", False),
+            "enable_state_observation": self._config.get("enable_state_observation", True),
+            "enable_reactive_execution": self._config.get("enable_reactive_execution", True),
+            "enable_dynamic_strategy_switching": self._config.get("enable_dynamic_strategy_switching", False),
+            "enable_context_pruning": self._config.get("enable_context_pruning", True),
+            "enable_context_summarization": self._config.get("enable_context_summarization", True),
+            "enable_caching": self._config.get("enable_caching", True),
+
+            # Execution Parameters
+            "max_iterations": self._config.get("max_iterations"),
+            "max_task_retries": self._config.get("max_task_retries", 3),
+            "log_level": self._config.get("log_level", "info"),
+            "min_completion_score": self._config.get("min_completion_score", 1.0),
+            "cache_ttl": self._config.get("cache_ttl", 3600),
+            "offline_mode": self._config.get("offline_mode", False),
+
+            # Context Management
+            "max_context_messages": self._config.get("max_context_messages", 20),
+            "max_context_tokens": self._config.get("max_context_tokens"),
+            "context_pruning_strategy": self._config.get("context_pruning_strategy", "balanced"),
+            "context_token_budget": self._config.get("context_token_budget"),
+            "context_pruning_aggressiveness": self._config.get("context_pruning_aggressiveness", 0.5),
+            "context_summarization_frequency": self._config.get("context_summarization_frequency", 10),
+            "response_format": self._config.get("response_format"),
+            "reasoning_strategy": self._config.get("reasoning_strategy", "adaptive"),
+
+            # Tool Configuration
+            "tool_use_policy": self._config.get("tool_use_policy", "always"),
+            "tool_use_max_consecutive_calls": self._config.get("tool_use_max_consecutive_calls", 5),
+            "check_tool_feasibility": self._config.get("check_tool_feasibility", False),
+
+            # Vector Memory Configuration
+            "vector_memory_collection": self._config.get("vector_memory_collection"),
+
+            # Model Provider Options
+            "model_provider_options": self._config.get("model_provider_options", {}),
+        }
+
+        # Handle context_pruning_aggressiveness which might be a string in builder
+        aggressiveness = config_mapping["context_pruning_aggressiveness"]
+        if isinstance(aggressiveness, str):
+            # Convert string aggressiveness to float
+            aggressiveness_map = {
+                "conservative": 0.3,
+                "balanced": 0.5,
+                "aggressive": 0.7,
+            }
+            config_mapping["context_pruning_aggressiveness"] = aggressiveness_map.get(
+                aggressiveness, 0.5
+            )
+
+        # Filter out None values for optional fields
+        filtered_config = {k: v for k, v in config_mapping.items() if v is not None}
+
+        return AgentConfig(**filtered_config)
+
+    async def _initialize_mcp_client(self) -> Optional[MCPClient]:
+        """
+        Initialize MCP client if configured.
+
+        Returns:
+            Optional[MCPClient]: The initialized MCP client, or None if not configured
+        """
+        # Return existing client if already set
+        if self._mcp_client is not None:
+            return self._mcp_client
+
+        # Check if MCP is configured
+        mcp_server_filter = self._mcp_server_filter or self._config.get("mcp_server_filter")
+        mcp_config = self._mcp_config or self._config.get("mcp_config")
+
+        if not mcp_server_filter and not mcp_config:
+            return None
+
+        try:
+            from reactive_agents.config.mcp_config import MCPConfig
+
+            # Load or validate MCP config
+            if mcp_config and not isinstance(mcp_config, MCPConfig):
+                mcp_config = MCPConfig.model_validate(mcp_config, strict=False)
+            # Don't create empty MCPConfig - let MCPClient load from file if needed
+
+            self._mcp_config = mcp_config
+
+            # Create and initialize MCP client
+            # Only pass server_config if we have an actual config, otherwise let client load from file
+            mcp_client = MCPClient(
+                server_config=mcp_config if mcp_config else None,
+                server_filter=mcp_server_filter,
+            )
+            self._mcp_client = await mcp_client.initialize()
+
+            self._logger.info(
+                f"MCP client initialized with servers: {mcp_server_filter}"
+            )
+            return self._mcp_client
+
+        except Exception as e:
+            self._logger.error(f"Failed to initialize MCP client: {e}")
+            raise

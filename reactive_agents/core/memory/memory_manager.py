@@ -11,32 +11,17 @@ from reactive_agents.core.types.memory_types import AgentMemory
 from reactive_agents.core.types.status_types import TaskStatus
 from reactive_agents.core.types.session_types import AgentSession
 
-# Need to import AgentMemory from its original location or move it
-# Assuming AgentMemory is defined in react_agent for now
-# try:
-#     from agents.react_agent import AgentMemory, TaskStatus
-# except ImportError:
-#     # Fallback if react_agent cannot be imported directly (e.g., during initial setup)
-#     class AgentMemory(BaseModel): # Basic placeholder
-#         agent_name: str
-#         session_history: List[Dict[str, Any]] = []
-#         tool_preferences: Dict[str, Any] = {}
-#         reflections: List[Dict[str, Any]] = [] # Keep reflections sync'd
-#         last_updated: datetime = Field(default_factory=datetime.now)
-#     class TaskStatus: # Placeholder
-#         COMPLETE = "complete"
-#         RESCOPED_COMPLETE = "rescoped_complete"
-
+# Import ContextProtocol at runtime so Pydantic can resolve the forward reference
+from reactive_agents.core.context.context_protocol import ContextProtocol
 
 if TYPE_CHECKING:
-    from reactive_agents.core.context.agent_context import AgentContext
     from reactive_agents.utils.logging import Logger
 
 
 class MemoryManager(BaseModel):
     """Manages agent's persistent memory (session history, preferences, reflections)."""
 
-    context: AgentContext = Field(exclude=True)  # Reference back to the main context
+    context: "ContextProtocol" = Field(exclude=True)  # Reference back to the context
 
     # State
     agent_memory: Optional[AgentMemory] = None

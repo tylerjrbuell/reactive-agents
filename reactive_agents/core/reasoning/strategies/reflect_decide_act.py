@@ -1,20 +1,20 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Dict, Any, Optional
+
+from pydantic import Field
 
 from reactive_agents.core.types.reasoning_types import ReasoningContext
 from reactive_agents.core.reasoning.strategies.base import StrategyCapabilities, StrategyResult
 from reactive_agents.core.reasoning.strategy_components import ComponentBasedStrategy
 from reactive_agents.core.reasoning.protocols import RetryStrategy
-from reactive_agents.core.types.session_types import (
-    ReflectDecideActState,
-    register_strategy,
-)
+from reactive_agents.core.types.session_types import register_strategy
 from reactive_agents.core.reasoning.steps.base import BaseReasoningStep
 from reactive_agents.core.reasoning.steps.reflect_decide_act_steps import (
     ReflectOnSituationStep,
     DecideNextActionStep,
     ExecuteActionStep,
 )
+from reactive_agents.core.reasoning.strategies.states import ReflectDecideActState
 
 
 @register_strategy("reflect_decide_act", ReflectDecideActState)

@@ -1,5 +1,7 @@
 from __future__ import annotations
-from typing import List
+from typing import List, Dict, Any
+
+from pydantic import BaseModel, Field
 
 from reactive_agents.core.types.reasoning_types import ReasoningContext
 from reactive_agents.core.reasoning.strategies.base import (
@@ -8,10 +10,11 @@ from reactive_agents.core.reasoning.strategies.base import (
 )
 from reactive_agents.core.reasoning.strategy_components import ComponentBasedStrategy
 from reactive_agents.core.reasoning.protocols import RetryStrategy
-from reactive_agents.core.types.session_types import ReactiveState, register_strategy
+from reactive_agents.core.types.session_types import register_strategy
 from reactive_agents.core.reasoning.steps.base import BaseReasoningStep
 from reactive_agents.core.reasoning.steps.reactive_steps import ReactiveActStep
 from reactive_agents.core.reasoning.steps.common import EvaluateTaskCompletionStep
+from reactive_agents.core.reasoning.strategies.states import ReactiveState
 
 
 @register_strategy("reactive", ReactiveState)

@@ -3,6 +3,7 @@ import asyncio
 import time
 import traceback
 import uuid
+from enum import Enum
 from typing import Dict, Any, Optional, TYPE_CHECKING
 from reactive_agents.core.types.status_types import TaskStatus
 from reactive_agents.core.types.event_types import AgentStateEvent
@@ -231,10 +232,9 @@ class ExecutionEngine:
         )
 
         # Convert strategy name to string if it's an enum
-        if hasattr(configured_strategy, "value") and not isinstance(
-            configured_strategy, str
-        ):
-            strategy_name = configured_strategy.value
+        # Note: Check Enum first because ReasoningStrategies(str, Enum) passes isinstance(x, str)
+        if isinstance(configured_strategy, Enum):
+            strategy_name = str(configured_strategy.value)
         else:
             strategy_name = str(configured_strategy)
 

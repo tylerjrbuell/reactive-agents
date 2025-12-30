@@ -58,22 +58,23 @@ class ReasoningEngine:
         # Simple data stores
         self._completed_actions: List[str] = []
 
-        # Initialize prompt classes
-        self._prompts: Dict[PromptKey, BasePrompt] = {
-            "system": SystemPrompt(context),
-            "single_step_planning": SingleStepPlanningPrompt(context),
-            "reflection": ReflectionPrompt(context),
-            "plan_generation": PlanGenerationPrompt(context),
-            "completion_validation": TaskCompletionValidationPrompt(context),
-            "plan_progress_reflection": PlanProgressReflectionPrompt(context),
-            "error_recovery": ErrorRecoveryPrompt(context),
-            "final_answer": FinalAnswerPrompt(context),
-            "tool_selection": ToolSelectionPrompt(context),
-            "strategy_transition": StrategyTransitionPrompt(context),
-            "plan_extension": PlanExtensionPrompt(context),
-            "task_goal_evaluation": TaskGoalEvaluationPrompt(context),
-            "memory_summarization": MemorySummarizationPrompt(context),
-            "execution_result_summary": ExecutionResultSummaryPrompt(context),
+        # Lazy loading: Store classes, not instances
+        self._prompt_cache: Dict[PromptKey, BasePrompt] = {}
+        self._prompt_classes: Dict[PromptKey, type[BasePrompt]] = {
+            "system": SystemPrompt,
+            "single_step_planning": SingleStepPlanningPrompt,
+            "reflection": ReflectionPrompt,
+            "plan_generation": PlanGenerationPrompt,
+            "completion_validation": TaskCompletionValidationPrompt,
+            "plan_progress_reflection": PlanProgressReflectionPrompt,
+            "error_recovery": ErrorRecoveryPrompt,
+            "final_answer": FinalAnswerPrompt,
+            "tool_selection": ToolSelectionPrompt,
+            "strategy_transition": StrategyTransitionPrompt,
+            "plan_extension": PlanExtensionPrompt,
+            "task_goal_evaluation": TaskGoalEvaluationPrompt,
+            "memory_summarization": MemorySummarizationPrompt,
+            "execution_result_summary": ExecutionResultSummaryPrompt,
         }
 
     # === Prompt Management ===
@@ -104,12 +105,13 @@ class ReasoningEngine:
             return None
 
     def get_prompt(self, prompt_type: PromptKey, **kwargs) -> BasePrompt:
-        """Get a sophisticated prompt using the class-based system."""
-
-        try:
-            return self._prompts[prompt_type]
-        except Exception as e:
-            raise e
+        """Lazy-load prompts on first access."""
+        if prompt_type not in self._prompt_cache:
+            prompt_class = self._prompt_classes.get(prompt_type)
+            if not prompt_class:
+                raise ValueError(f"Unknown prompt type: {prompt_type}")
+            self._prompt_cache[prompt_type] = prompt_class(self.context)
+        return self._prompt_cache[prompt_type]
 
     # === Canonical Tool Execution ===
     async def execute_tools(
@@ -150,6 +152,57 @@ class ReasoningEngine:
                         "success": False,
                     }
                 )
+
+        return results
+
+    async def execute_tools_parallel(
+        self, tool_calls: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Execute tool calls in parallel and return results.
+
+        This method executes multiple independent tool calls concurrently using
+        asyncio.gather(), improving performance when tools don't depend on each
+        other's outputs.
+
+        Args:
+            tool_calls: List of tool call dictionaries to execute in parallel
+
+        Returns:
+            List of result dictionaries in the same order as input tool_calls.
+            Each dict contains: tool_name, tool_call_id, result, success, error, execution_time
+
+        Note:
+            For tools that depend on each other's outputs, use execute_tools()
+            which runs tools sequentially.
+        """
+        if not self.context.tool_manager:
+            return []
+
+        if not tool_calls:
+            return []
+
+        # Use the ToolManager's parallel execution
+        parallel_results = await self.context.tool_manager.execute_tools_parallel(
+            tool_calls
+        )
+
+        # Convert ParallelToolResult objects to dicts and track completed actions
+        results = []
+        for pr in parallel_results:
+            # Track completed actions for successful tools
+            if pr.success and pr.tool_name not in self._completed_actions:
+                self._completed_actions.append(pr.tool_name)
+
+            results.append(
+                {
+                    "tool_name": pr.tool_name,
+                    "tool_call_id": pr.tool_call_id,
+                    "result": pr.result,
+                    "success": pr.success,
+                    "error": pr.error,
+                    "execution_time": pr.execution_time,
+                }
+            )
 
         return results
 
@@ -387,6 +440,10 @@ class ReasoningEngine:
     def reset(self):
         """Reset engine for new task."""
         self._completed_actions.clear()
+
+    def reset_prompt_cache(self) -> None:
+        """Clear the prompt cache, forcing re-instantiation on next access."""
+        self._prompt_cache.clear()
 
 
 # Global engine cache

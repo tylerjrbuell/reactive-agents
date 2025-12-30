@@ -559,9 +559,10 @@ class Agent(ABC, AgentLifecycleProtocol, AgentControlProtocol):
         try:
             self.agent_logger.info(f"Initializing {self.context.agent_name}...")
 
-            # Initialize MCP if configured
+            # Initialize MCP if configured and not already initialized by builder
             if (
-                self.config
+                not self.context.mcp_client
+                and self.config
                 and hasattr(self.config, "mcp_config")
                 and (
                     self.config.mcp_config

@@ -2,13 +2,14 @@
 Tests for ToolManager.
 
 Tests the tool management functionality including tool discovery, execution,
-caching, validation, and integration with SOLID components.
+caching, validation, integration with SOLID components, and parallel execution.
 """
 
 import pytest
 import asyncio
+import time
 from unittest.mock import Mock, patch, MagicMock, AsyncMock, create_autospec
-from reactive_agents.core.tools.tool_manager import ToolManager
+from reactive_agents.core.tools.tool_manager import ToolManager, ParallelToolResult
 from reactive_agents.core.tools.base import Tool
 from reactive_agents.core.tools.abstractions import ToolProtocol, MCPToolWrapper
 from reactive_agents.core.tools.tool_guard import ToolGuard
@@ -674,3 +675,429 @@ class TestToolManager:
 
         # Verify events were emitted
         mock_context.emit_event.assert_called()
+
+
+class TestParallelToolExecution:
+    """Test cases for parallel tool execution functionality."""
+
+    @pytest.fixture
+    def mock_context(self):
+        """Create a mock agent context."""
+        context = create_autospec(AgentContext, instance=True)
+        context.agent_name = "TestAgent"
+        context.enable_caching = True
+        context.cache_ttl = 3600
+        context.confirmation_callback = None
+        context.confirmation_config = None
+        context.tool_use_enabled = True
+        context.collect_metrics_enabled = True
+        context.tools = []
+        context.mcp_client = None
+
+        # Mock loggers
+        context.agent_logger = Mock()
+        context.tool_logger = Mock()
+        context.model_provider = Mock()
+
+        # Mock session
+        context.session = Mock()
+        context.session.successful_tools = set()
+
+        # Mock metrics manager
+        context.metrics_manager = Mock()
+        context.metrics_manager.update_tool_metrics = Mock()
+        context.metrics_manager.get_metrics = Mock(return_value={})
+
+        # Mock event emission
+        context.emit_event = Mock()
+
+        return context
+
+    @pytest.fixture
+    def mock_tools(self):
+        """Create multiple mock tools for parallel testing."""
+        tools = []
+        for i in range(3):
+            tool = Mock(spec=ToolProtocol)
+            tool.name = f"tool_{i}"
+            tool.tool_definition = {
+                "type": "function",
+                "function": {
+                    "name": f"tool_{i}",
+                    "description": f"Test tool {i}",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "param": {"type": "string"}
+                        },
+                    },
+                },
+            }
+            tools.append(tool)
+        return tools
+
+    @pytest.fixture
+    def tool_manager_for_parallel(self, mock_context, mock_tools):
+        """Create a tool manager configured for parallel execution tests."""
+        # Create mocked components
+        mock_guard = Mock(spec=ToolGuard)
+        mock_guard.add_default_guards = Mock()
+        mock_guard.can_use = Mock(return_value=True)
+        mock_guard.needs_confirmation = Mock(return_value=False)
+        mock_guard.record_use = Mock()
+
+        mock_cache = Mock(spec=ToolCache)
+        mock_cache.enabled = True
+        mock_cache.ttl = 3600
+        mock_cache.hits = 0
+        mock_cache.misses = 0
+        mock_cache.generate_cache_key = Mock(return_value=None)  # Disable caching for tests
+        mock_cache.get = Mock(return_value=None)
+        mock_cache.put = Mock()
+
+        mock_confirmation = Mock(spec=ToolConfirmation)
+        mock_confirmation.tool_requires_confirmation = Mock(return_value=False)
+        mock_confirmation.request_confirmation = AsyncMock(return_value=(True, None))
+
+        mock_validator = Mock(spec=ToolValidator)
+        mock_validator.validate_tool_result_usage = Mock(
+            return_value={"valid": True, "warnings": [], "suggestions": []}
+        )
+        mock_validator.store_search_data = Mock()
+
+        mock_executor = Mock(spec=ToolExecutor)
+
+        # Dynamic tool execution based on tool name
+        async def execute_tool_side_effect(tool, tool_name, params):
+            # Simulate some work
+            await asyncio.sleep(0.01)
+            return f"Result from {tool_name}"
+
+        mock_executor.execute_tool = AsyncMock(side_effect=execute_tool_side_effect)
+
+        def parse_tool_arguments_side_effect(tool_call):
+            function = tool_call.get("function", {})
+            name = function.get("name", "unknown")
+            args = function.get("arguments", {})
+            return (name, args)
+
+        mock_executor.parse_tool_arguments = Mock(side_effect=parse_tool_arguments_side_effect)
+        mock_executor.add_reasoning_to_context = Mock()
+        mock_executor._generate_tool_summary = AsyncMock(return_value="Tool summary")
+
+        # Create manager
+        manager = ToolManager(context=mock_context)
+        manager.tools = mock_tools.copy()
+        manager.guard = mock_guard
+        manager.cache = mock_cache
+        manager.confirmation = mock_confirmation
+        manager.validator = mock_validator
+        manager.executor = mock_executor
+
+        return manager
+
+    def test_parallel_tool_result_dataclass(self):
+        """Test ParallelToolResult dataclass creation and attributes."""
+        result = ParallelToolResult(
+            tool_name="test_tool",
+            tool_call_id="call_123",
+            result="Success",
+            success=True,
+            error=None,
+            execution_time=0.5,
+        )
+
+        assert result.tool_name == "test_tool"
+        assert result.tool_call_id == "call_123"
+        assert result.result == "Success"
+        assert result.success is True
+        assert result.error is None
+        assert result.execution_time == 0.5
+
+    def test_parallel_tool_result_with_error(self):
+        """Test ParallelToolResult with error state."""
+        result = ParallelToolResult(
+            tool_name="failed_tool",
+            tool_call_id="call_456",
+            result=None,
+            success=False,
+            error="Connection timeout",
+            execution_time=1.0,
+        )
+
+        assert result.success is False
+        assert result.error == "Connection timeout"
+        assert result.result is None
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_empty_list(self, tool_manager_for_parallel):
+        """Test parallel execution with empty tool list."""
+        results = await tool_manager_for_parallel.execute_tools_parallel([])
+
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_single_tool(self, tool_manager_for_parallel):
+        """Test parallel execution with a single tool."""
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {"param": "value1"}}}
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 1
+        assert results[0].tool_name == "tool_0"
+        assert results[0].tool_call_id == "call_1"
+        assert results[0].success is True
+        assert results[0].execution_time > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_multiple_tools(self, tool_manager_for_parallel):
+        """Test parallel execution with multiple tools."""
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {"param": "a"}}},
+            {"id": "call_2", "function": {"name": "tool_1", "arguments": {"param": "b"}}},
+            {"id": "call_3", "function": {"name": "tool_2", "arguments": {"param": "c"}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 3
+        # Verify order is preserved
+        assert results[0].tool_call_id == "call_1"
+        assert results[1].tool_call_id == "call_2"
+        assert results[2].tool_call_id == "call_3"
+        # Verify all succeeded
+        assert all(r.success for r in results)
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_order_preserved(self, tool_manager_for_parallel):
+        """Test that result order matches input order."""
+        tool_calls = [
+            {"id": "first", "function": {"name": "tool_2", "arguments": {}}},
+            {"id": "second", "function": {"name": "tool_0", "arguments": {}}},
+            {"id": "third", "function": {"name": "tool_1", "arguments": {}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert results[0].tool_call_id == "first"
+        assert results[0].tool_name == "tool_2"
+        assert results[1].tool_call_id == "second"
+        assert results[1].tool_name == "tool_0"
+        assert results[2].tool_call_id == "third"
+        assert results[2].tool_name == "tool_1"
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_one_failure_others_continue(
+        self, tool_manager_for_parallel, mock_context
+    ):
+        """Test that one tool failure doesn't affect others."""
+        # Make one tool fail
+        original_use_tool = tool_manager_for_parallel.use_tool
+
+        call_count = 0
+
+        async def use_tool_with_failure(tool_call):
+            nonlocal call_count
+            call_count += 1
+            tool_name = tool_call.get("function", {}).get("name")
+            if tool_name == "tool_1":
+                return "Error: Simulated failure"
+            return f"Success: {tool_name}"
+
+        tool_manager_for_parallel.use_tool = use_tool_with_failure
+
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
+            {"id": "call_2", "function": {"name": "tool_1", "arguments": {}}},  # This will fail
+            {"id": "call_3", "function": {"name": "tool_2", "arguments": {}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 3
+        assert call_count == 3  # All tools were attempted
+
+        # First tool succeeded
+        assert results[0].success is True
+        assert "Success" in str(results[0].result)
+
+        # Second tool failed
+        assert results[1].success is False
+        assert "Error" in str(results[1].error) or "Error" in str(results[1].result)
+
+        # Third tool succeeded despite second failing
+        assert results[2].success is True
+        assert "Success" in str(results[2].result)
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_exception_handling(
+        self, tool_manager_for_parallel, mock_context
+    ):
+        """Test that exceptions in one tool don't crash others."""
+        async def use_tool_with_exception(tool_call):
+            tool_name = tool_call.get("function", {}).get("name")
+            if tool_name == "tool_1":
+                raise RuntimeError("Unexpected error")
+            return f"Success: {tool_name}"
+
+        tool_manager_for_parallel.use_tool = use_tool_with_exception
+
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
+            {"id": "call_2", "function": {"name": "tool_1", "arguments": {}}},  # Raises exception
+            {"id": "call_3", "function": {"name": "tool_2", "arguments": {}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 3
+
+        # First tool succeeded
+        assert results[0].success is True
+
+        # Second tool failed with exception
+        assert results[1].success is False
+        assert "Unexpected error" in results[1].error
+
+        # Third tool succeeded
+        assert results[2].success is True
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_without_tool_call_id(
+        self, tool_manager_for_parallel
+    ):
+        """Test parallel execution when tool calls don't have IDs."""
+        tool_calls = [
+            {"function": {"name": "tool_0", "arguments": {"param": "value"}}},
+            {"function": {"name": "tool_1", "arguments": {"param": "value"}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 2
+        assert results[0].tool_call_id is None
+        assert results[1].tool_call_id is None
+        # Tool names should still be correct
+        assert results[0].tool_name == "tool_0"
+        assert results[1].tool_name == "tool_1"
+
+    @pytest.mark.asyncio
+    async def test_execute_tools_parallel_logs_summary(
+        self, tool_manager_for_parallel, mock_context
+    ):
+        """Test that parallel execution logs summary information."""
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
+            {"id": "call_2", "function": {"name": "tool_1", "arguments": {}}},
+        ]
+
+        await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        # Verify logging was called with summary
+        mock_context.tool_logger.info.assert_called()
+        calls = [str(call) for call in mock_context.tool_logger.info.call_args_list]
+        # Should have start and completion logs
+        assert any("parallel" in call.lower() or "Starting" in call for call in calls)
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_safe_success(self, tool_manager_for_parallel):
+        """Test execute_tool_safe with successful execution."""
+        tool_call = {"id": "call_1", "function": {"name": "tool_0", "arguments": {"param": "test"}}}
+
+        result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
+
+        assert isinstance(result, ParallelToolResult)
+        assert result.success is True
+        assert result.tool_name == "tool_0"
+        assert result.tool_call_id == "call_1"
+        assert result.execution_time > 0
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_safe_failure(self, tool_manager_for_parallel):
+        """Test execute_tool_safe with failed execution."""
+        async def failing_use_tool(tool_call):
+            return "Error: Tool failed"
+
+        tool_manager_for_parallel.use_tool = failing_use_tool
+
+        tool_call = {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}}
+
+        result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
+
+        assert isinstance(result, ParallelToolResult)
+        assert result.success is False
+        assert "Error" in str(result.error) or "Error" in str(result.result)
+
+    @pytest.mark.asyncio
+    async def test_execute_tool_safe_exception(self, tool_manager_for_parallel):
+        """Test execute_tool_safe handles exceptions gracefully."""
+        async def exception_use_tool(tool_call):
+            raise ValueError("Something went wrong")
+
+        tool_manager_for_parallel.use_tool = exception_use_tool
+
+        tool_call = {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}}
+
+        result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
+
+        assert isinstance(result, ParallelToolResult)
+        assert result.success is False
+        assert "Something went wrong" in result.error
+
+    @pytest.mark.asyncio
+    async def test_parallel_execution_respects_guards(
+        self, tool_manager_for_parallel, mock_context
+    ):
+        """Test that parallel execution respects tool guards."""
+        # Configure guard to block tool_1
+        tool_manager_for_parallel.guard.can_use = Mock(
+            side_effect=lambda name: name != "tool_1"
+        )
+
+        tool_calls = [
+            {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
+            {"id": "call_2", "function": {"name": "tool_1", "arguments": {}}},  # Should be blocked
+            {"id": "call_3", "function": {"name": "tool_2", "arguments": {}}},
+        ]
+
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+
+        assert len(results) == 3
+        # tool_0 should succeed
+        assert results[0].success is True
+        # tool_1 should be rate-limited
+        assert results[1].success is False
+        assert "rate-limited" in str(results[1].result).lower() or "rate-limited" in str(results[1].error or "").lower()
+        # tool_2 should succeed
+        assert results[2].success is True
+
+    @pytest.mark.asyncio
+    async def test_parallel_execution_concurrent_timing(self, tool_manager_for_parallel):
+        """Test that parallel execution actually runs concurrently."""
+        execution_times = []
+
+        async def timed_use_tool(tool_call):
+            start = time.time()
+            await asyncio.sleep(0.1)  # Simulate 100ms of work
+            execution_times.append(time.time() - start)
+            return f"Result"
+
+        tool_manager_for_parallel.use_tool = timed_use_tool
+
+        tool_calls = [
+            {"function": {"name": "tool_0", "arguments": {}}},
+            {"function": {"name": "tool_1", "arguments": {}}},
+            {"function": {"name": "tool_2", "arguments": {}}},
+        ]
+
+        start_time = time.time()
+        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+        total_time = time.time() - start_time
+
+        assert len(results) == 3
+        # If run sequentially, this would take ~300ms
+        # If run in parallel, it should take ~100ms (plus overhead)
+        # We allow up to 250ms to account for test environment variability
+        assert total_time < 0.25, f"Parallel execution took {total_time}s, expected < 0.25s"

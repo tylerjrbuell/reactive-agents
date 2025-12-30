@@ -4,8 +4,10 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+# Import ContextProtocol at runtime so Pydantic can resolve the forward reference
+from reactive_agents.core.context.context_protocol import ContextProtocol
+
 if TYPE_CHECKING:
-    from reactive_agents.core.context.agent_context import AgentContext
     from reactive_agents.utils.logging import Logger
 
 
@@ -19,7 +21,7 @@ class ToolMetrics(BaseModel):
 class MetricsManager(BaseModel):
     """A self-contained, active model for managing and calculating agent execution metrics."""
 
-    context: AgentContext = Field(exclude=True)
+    context: "ContextProtocol" = Field(exclude=True)
 
     # Core Metrics
     start_time: float = Field(default_factory=time.time)

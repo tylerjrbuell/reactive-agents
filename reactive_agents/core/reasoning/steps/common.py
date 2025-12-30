@@ -9,12 +9,12 @@ from reactive_agents.core.types.reasoning_types import (
     EvaluationPayload,
     StrategyAction,
 )
-from reactive_agents.core.types.session_types import (
+from reactive_agents.core.types.session_types import BaseStrategyState
+from reactive_agents.core.reasoning.strategies.base import StrategyResult
+from reactive_agents.core.reasoning.strategies.states import (
     PlanExecuteReflectState,
     ReactiveState,
-    BaseStrategyState,
 )
-from reactive_agents.core.reasoning.strategies.base import StrategyResult
 
 if TYPE_CHECKING:
     from reactive_agents.core.types.reasoning_types import ReasoningContext

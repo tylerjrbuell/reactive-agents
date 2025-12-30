@@ -13,10 +13,8 @@ from reactive_agents.core.types.status_types import StepStatus
 from reactive_agents.core.reasoning.strategies.base import StrategyResult
 
 if TYPE_CHECKING:
-    from reactive_agents.core.types.session_types import (
-        PlanExecuteReflectState,
-        BaseStrategyState,
-    )
+    from reactive_agents.core.types.session_types import BaseStrategyState
+    from reactive_agents.core.reasoning.strategies.plan_execute_reflect import PlanExecuteReflectState
     from reactive_agents.core.types.reasoning_types import ReasoningContext
 
 

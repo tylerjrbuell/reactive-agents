@@ -12,10 +12,8 @@ from reactive_agents.core.types.reasoning_types import (
 )
 
 if TYPE_CHECKING:
-    from reactive_agents.core.types.session_types import (
-        ReflectDecideActState,
-        BaseStrategyState,
-    )
+    from reactive_agents.core.types.session_types import BaseStrategyState
+    from reactive_agents.core.reasoning.strategies.reflect_decide_act import ReflectDecideActState
     from reactive_agents.core.types.reasoning_types import ReasoningContext
 
 

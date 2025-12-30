@@ -8,33 +8,17 @@ from pydantic import BaseModel, Field
 # Import shared types from the new location
 from reactive_agents.core.types.status_types import TaskStatus
 
-# Assuming TaskStatus is available (e.g., from react_agent or a common types file)
-# try:
-#     from agents.react_agent import TaskStatus
-# except ImportError:
-#      # Basic placeholder if import fails
-#      class TaskStatus:
-#          INITIALIZED = "initialized"
-#          WAITING_DEPENDENCIES = "waiting_for_dependencies"
-#          RUNNING = "running"
-#          MISSING_TOOLS = "missing_tools"
-#          COMPLETE = "complete"
-#          RESCOPED_COMPLETE = "rescoped_complete"
-#          MAX_ITERATIONS = "max_iterations_reached"
-#          ERROR = "error"
-#          CANCELLED = "cancelled"
-#          def __str__(self): return self.value # type: ignore
-
+# Import ContextProtocol at runtime so Pydantic can resolve the forward reference
+from reactive_agents.core.context.context_protocol import ContextProtocol
 
 if TYPE_CHECKING:
-    from reactive_agents.core.context.agent_context import AgentContext
     from reactive_agents.utils.logging import Logger
 
 
 class WorkflowManager(BaseModel):
     """Manages workflow dependencies and updates the shared workflow context."""
 
-    context: AgentContext = Field(exclude=True)  # Reference back to the main context
+    context: "ContextProtocol" = Field(exclude=True)  # Reference back to the context
 
     # State / Config
     workflow_context: Optional[Dict[str, Any]] = (

@@ -275,7 +275,7 @@ class TestReasoningStrategies:
         )
 
         # Mock state
-        from reactive_agents.core.types.session_types import ReactiveState
+        from reactive_agents.core.reasoning.strategies.reactive import ReactiveState
 
         mock_state = ReactiveState()
 
