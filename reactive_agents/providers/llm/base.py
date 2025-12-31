@@ -70,25 +70,45 @@ class BaseModelProvider(ABC, metaclass=AutoRegisterModelMeta):
         self.instructor_client = None
         self._supports_structured = True
 
+        # Track dropped parameters for debugging
+        self._dropped_params: List[str] = []
+
+    def _warn_parameter(self, message: str, level: str = "warning") -> None:
+        """
+        Log a parameter-related warning if context and logger are available.
+
+        Args:
+            message: Warning message to log
+            level: Log level ("warning", "debug", or "info")
+        """
+        if self.context and hasattr(self.context, "agent_logger") and self.context.agent_logger:
+            if level == "warning":
+                self.context.agent_logger.warning(message)
+            elif level == "debug":
+                self.context.agent_logger.debug(message)
+            else:
+                self.context.agent_logger.info(message)
+
     def get_openai_params(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract OpenAI-style parameters for Instructor and OpenAI-compatible providers.
-        
+
         The framework uses OpenAI parameter names as the standard interface.
         This method filters and validates OpenAI-compatible parameters.
-        
+
         Args:
             options: Configuration options from agent builder
-            
+
         Returns:
             Dictionary with OpenAI-style parameters for Instructor
         """
         openai_params = {}
-        
+        processed_params: set = set()
+
         # Standard OpenAI parameters that Instructor supports across all providers
         standard_params = {
             "temperature": float,
-            "max_tokens": int, 
+            "max_tokens": int,
             "top_p": float,
             "frequency_penalty": float,
             "presence_penalty": float,
@@ -96,9 +116,17 @@ class BaseModelProvider(ABC, metaclass=AutoRegisterModelMeta):
             "stream": bool,
             "n": int,
         }
-        
+
+        # Client configuration params (not passed to API calls, handled by provider __init__)
+        client_params = {
+            "base_url", "timeout", "max_retries", "default_headers", "default_query",
+            "api_key", "organization", "base_delay", "max_delay", "jitter_factor",
+            "rate_limit_retry_delay",
+        }
+
         for param, expected_type in standard_params.items():
             if param in options:
+                processed_params.add(param)
                 try:
                     # Type conversion and validation
                     if expected_type == float:
@@ -109,34 +137,78 @@ class BaseModelProvider(ABC, metaclass=AutoRegisterModelMeta):
                         openai_params[param] = bool(options[param])
                     else:
                         openai_params[param] = options[param]
-                except (ValueError, TypeError):
-                    # Skip invalid parameters rather than failing
-                    continue
-        
+                except (ValueError, TypeError) as e:
+                    # Warn about type conversion failures
+                    self._warn_parameter(
+                        f"[{self.name}] Parameter '{param}' has invalid type: "
+                        f"expected {expected_type.__name__}, got {type(options[param]).__name__}. "
+                        f"Parameter will be dropped. Error: {e}"
+                    )
+                    self._dropped_params.append(param)
+
         # Handle stop sequences (can be string or list)
         if "stop" in options:
             openai_params["stop"] = options["stop"]
+            processed_params.add("stop")
         elif "stop_sequences" in options:
             openai_params["stop"] = options["stop_sequences"]
-            
+            processed_params.add("stop_sequences")
+
+        # Warn about unrecognized parameters (excluding known client params)
+        for param in options:
+            if param not in processed_params and param not in client_params:
+                self._warn_parameter(
+                    f"[{self.name}] Unrecognized parameter '{param}' will be ignored. "
+                    f"Supported API parameters: {', '.join(sorted(standard_params.keys()))}",
+                    level="warning"
+                )
+                self._dropped_params.append(param)
+
         return openai_params
 
     def get_native_params(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """
         Convert OpenAI-style options to provider-native parameters for fallback scenarios.
-        
+
         This method should be overridden by each provider to map OpenAI parameters
         to their specific API format when falling back to native SDK calls.
-        
+
         Args:
             options: OpenAI-style configuration options
-            
+
         Returns:
             Dictionary with provider-native parameter names and values
         """
         # Default implementation returns OpenAI params as-is
         # (works for OpenAI and OpenAI-compatible providers)
         return self.get_openai_params(options)
+
+    def get_dropped_params(self) -> List[str]:
+        """
+        Get list of parameters that were dropped during configuration.
+
+        Returns:
+            List of parameter names that were dropped (due to type errors or being unrecognized)
+        """
+        return self._dropped_params.copy()
+
+    def report_configuration_summary(self) -> None:
+        """
+        Log a summary of the provider configuration, including any dropped parameters.
+
+        This is useful for debugging configuration issues.
+        """
+        if not self._dropped_params:
+            self._warn_parameter(
+                f"[{self.name}] All configuration parameters validated successfully.",
+                level="debug"
+            )
+        else:
+            self._warn_parameter(
+                f"[{self.name}] Configuration summary: {len(self._dropped_params)} parameter(s) "
+                f"were dropped: {', '.join(self._dropped_params)}",
+                level="warning"
+            )
 
     def _handle_error(self, error: Exception, operation: str) -> None:
         """

@@ -7,12 +7,21 @@ Learn how to create and configure agents using the builder pattern.
 Reactive Agents uses a fluent builder pattern for agent creation:
 
 ```python
-from reactive_agents import ReactiveAgentBuilder
+from reactive_agents import ReactiveAgentBuilder, Provider
 
 agent = await (
     ReactiveAgentBuilder()
     .with_name("MyAgent")
-    .with_model("ollama:llama3")
+    .with_model(Provider.OLLAMA, "llama3")  # Type-safe enum
+    .with_role("Assistant")
+    .build()
+)
+
+# String format also supported
+agent = await (
+    ReactiveAgentBuilder()
+    .with_name("MyAgent")
+    .with_model("ollama:llama3")  # String format
     .with_role("Assistant")
     .build()
 )
@@ -33,13 +42,22 @@ Each `.with_*()` method returns the builder, allowing method chaining.
 ### Model Configuration
 
 ```python
-.with_model("provider:model")  # LLM provider and model
+from reactive_agents import Provider
 
-# Examples:
+# Type-safe enum approach (recommended)
+.with_model(Provider.OLLAMA, "llama3")
+.with_model(Provider.OPENAI, "gpt-4")
+.with_model(Provider.ANTHROPIC, "claude-3-sonnet")
+.with_model(Provider.GOOGLE, "gemini-pro")
+.with_model(Provider.GROQ, "llama3-70b")
+
+# String format (also supported)
 .with_model("ollama:llama3")
 .with_model("openai:gpt-4")
 .with_model("anthropic:claude-3-sonnet")
 ```
+
+Available providers: `ANTHROPIC`, `OPENAI`, `OLLAMA`, `GOOGLE`, `GROQ`
 
 ### Reasoning Configuration
 

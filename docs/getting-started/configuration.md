@@ -6,25 +6,27 @@ Configure your agent's behavior with the builder pattern.
 
 ### Model Provider
 
+You can configure the model using either string format or type-safe enums:
+
 ```python
-# Ollama (local)
+from reactive_agents import Provider
+
+# Type-safe enum approach (recommended)
+.with_model(Provider.ANTHROPIC, "claude-3-sonnet")
+.with_model(Provider.OPENAI, "gpt-4")
+.with_model(Provider.OLLAMA, "llama3")
+.with_model(Provider.GOOGLE, "gemini-pro")
+.with_model(Provider.GROQ, "llama3-70b")
+
+# String format (also supported)
 .with_model("ollama:llama3")
-.with_model("ollama:mistral:7b")
-
-# OpenAI
 .with_model("openai:gpt-4")
-.with_model("openai:gpt-3.5-turbo")
-
-# Anthropic
-.with_model("anthropic:claude-3-opus")
 .with_model("anthropic:claude-3-sonnet")
-
-# Google
 .with_model("google:gemini-pro")
-
-# Groq
 .with_model("groq:llama3-70b")
 ```
+
+Available providers: `ANTHROPIC`, `OPENAI`, `OLLAMA`, `GOOGLE`, `GROQ`
 
 ### Agent Identity
 
@@ -103,27 +105,41 @@ async def my_tool(param: str) -> str:
 ## Context Management
 
 ```python
-# Message limits
-.with_context_config(
-    max_context_messages=20,
-    max_context_tokens=4000
-)
+from reactive_agents import ContextPruningStrategy
 
-# Pruning behavior
+# Message limits
+.with_max_context_messages(20)
+.with_max_context_tokens(4000)
+
+# Pruning behavior - enum approach (recommended)
+.with_context_pruning_strategy(ContextPruningStrategy.BALANCED)
+.with_context_pruning_aggressiveness(ContextPruningStrategy.CONSERVATIVE)
+
+# Pruning behavior - string approach (also supported)
 .with_context_pruning_strategy("balanced")  # conservative, balanced, aggressive
-.with_enable_context_pruning(True)
-.with_enable_context_summarization(True)
+
+.with_context_pruning(True)
+.with_context_summarization(True)
 ```
+
+Available strategies: `CONSERVATIVE`, `BALANCED`, `AGGRESSIVE`
 
 ## Tool Use Policy
 
 ```python
-# Policy options: always, required_only, adaptive, never
-.with_tool_use_policy("adaptive")
+from reactive_agents import ToolUsePolicy
+
+# Enum approach (recommended)
+.with_tool_use_policy(ToolUsePolicy.ADAPTIVE)
+
+# String approach (also supported)
+.with_tool_use_policy("adaptive")  # always, required_only, adaptive, never
 
 # Limit consecutive tool calls
 .with_tool_use_max_consecutive_calls(3)
 ```
+
+Available policies: `ALWAYS`, `REQUIRED_ONLY`, `ADAPTIVE`, `NEVER`
 
 ## Confirmation Callbacks
 
@@ -168,7 +184,9 @@ config["always_confirm"].append("dangerous_tool")
 from reactive_agents import (
     ReactiveAgentBuilder,
     ReasoningStrategies,
-    ConfirmationConfig,
+    Provider,
+    ContextPruningStrategy,
+    ToolUsePolicy,
     tool,
 )
 
@@ -184,28 +202,24 @@ agent = await (
     ReactiveAgentBuilder()
     # Identity
     .with_name("AdvancedAgent")
-    .with_model("ollama:llama3")
+    .with_model(Provider.OLLAMA, "llama3")
     .with_role("Research Assistant")
     .with_instructions("Help users find information")
 
     # Strategy
     .with_reasoning_strategy(ReasoningStrategies.REACTIVE)
     .with_max_iterations(15)
-    .with_min_completion_score(0.9)
 
     # Tools
     .with_custom_tools([search])
-    .with_tool_use_policy("adaptive")
+    .with_tool_use_policy(ToolUsePolicy.ADAPTIVE)
 
     # Context
-    .with_enable_context_pruning(True)
-    .with_context_pruning_strategy("balanced")
-
-    # Memory
-    .with_use_memory_enabled(True)
+    .with_context_pruning(True)
+    .with_context_pruning_strategy(ContextPruningStrategy.BALANCED)
 
     # Confirmation
-    .with_confirmation_callback(confirm)
+    .with_confirmation(confirm)
 
     # Logging
     .with_log_level("info")

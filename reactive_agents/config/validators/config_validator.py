@@ -1,10 +1,18 @@
 """
 Configuration validation module for reactive-ai-agent framework.
 Handles validation and processing of agent configurations.
+
+This module provides high-level validation for complete agent configurations.
+For low-level validation functions, see reactive_agents.config.validation.
 """
 
 from typing import Dict, Any, Optional, List
 from reactive_agents.config.mcp_config import MCPConfig
+from reactive_agents.config.validation import (
+    validate_log_level,
+    validate_model_format,
+    ConfigurationValidationError,
+)
 from reactive_agents.providers.external.client import MCPClient
 from reactive_agents.core.types.confirmation_types import (
     ConfirmationCallbackProtocol,
@@ -131,16 +139,23 @@ class ConfigValidator:
         if not config["provider_model_name"]:
             raise ValueError("provider_model_name is required")
 
+        # Validate model format using centralized validation
+        try:
+            validate_model_format(config["provider_model_name"])
+        except ConfigurationValidationError as e:
+            raise ValueError(str(e))
+
         # Validate numeric fields
         if config["min_completion_score"] < 0 or config["min_completion_score"] > 1:
             raise ValueError("min_completion_score must be between 0 and 1")
         if config["max_iterations"] < 1:
             raise ValueError("max_iterations must be greater than 0")
 
-        # Validate log level
-        valid_log_levels = ["debug", "info", "warning", "error", "critical"]
-        if config["log_level"] not in valid_log_levels:
-            raise ValueError(f"log_level must be one of {valid_log_levels}")
+        # Validate log level using centralized validation
+        try:
+            config["log_level"] = validate_log_level(config["log_level"])
+        except ConfigurationValidationError as e:
+            raise ValueError(str(e))
 
         # Process and validate MCP configuration
         if config["mcp_config"] and not isinstance(config["mcp_config"], MCPConfig):

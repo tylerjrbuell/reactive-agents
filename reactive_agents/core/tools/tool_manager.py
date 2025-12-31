@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Union
 import time
 import asyncio
 from pydantic import BaseModel, Field, ConfigDict
@@ -23,8 +23,6 @@ from reactive_agents.core.tools.tool_executor import ToolExecutor
 # Import ContextProtocol at runtime so Pydantic can resolve the forward reference
 from reactive_agents.core.context.context_protocol import ContextProtocol
 
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
@@ -288,7 +286,7 @@ class ToolManager(BaseModel):
 
         # Create coroutines for each tool call
         async def execute_single_tool(
-            tool_call: Dict[str, Any], index: int
+            tool_call: Dict[str, Any],
         ) -> ParallelToolResult:
             """Execute a single tool with isolated error handling."""
             start_time = time.time()
@@ -353,9 +351,7 @@ class ToolManager(BaseModel):
 
         # Execute all tools concurrently
         # return_exceptions=False means we rely on our try/except in execute_single_tool
-        tasks = [
-            execute_single_tool(tool_call, i) for i, tool_call in enumerate(tool_calls)
-        ]
+        tasks = [execute_single_tool(tool_call) for tool_call in tool_calls]
         results = await asyncio.gather(*tasks)
 
         # Log summary

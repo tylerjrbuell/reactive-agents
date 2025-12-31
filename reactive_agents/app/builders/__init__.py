@@ -10,6 +10,8 @@ from .agent import (
     ConfirmationConfig,
     ToolConfig,
     Provider,
+    ContextPruningStrategy,
+    ToolUsePolicy,
     BuilderValidationError,
 )
 
@@ -19,5 +21,7 @@ __all__ = [
     "ConfirmationConfig",
     "ToolConfig",
     "Provider",
+    "ContextPruningStrategy",
+    "ToolUsePolicy",
     "BuilderValidationError",
 ]

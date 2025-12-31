@@ -76,7 +76,7 @@ class Provider(str, Enum):
 
     Example:
         builder.with_model(Provider.ANTHROPIC, "claude-3-sonnet-20240229")
-        # Or with string format:
+        - Or with string format:
         builder.with_model("anthropic:claude-3-sonnet-20240229")
     """
 
@@ -97,13 +97,64 @@ class Provider(str, Enum):
         return provider.lower() in cls.values()
 
 
+class ContextPruningStrategy(str, Enum):
+    """Strategies for context pruning during agent execution.
+
+    Use these enum values with `with_context_pruning_strategy()` for type-safe configuration:
+
+    Example:
+        builder.with_context_pruning_strategy(ContextPruningStrategy.BALANCED)
+    """
+
+    CONSERVATIVE = "conservative"
+    BALANCED = "balanced"
+    AGGRESSIVE = "aggressive"
+
+    @classmethod
+    def values(cls) -> List[str]:
+        """Get all supported strategy names."""
+        return [s.value for s in cls]
+
+    @classmethod
+    def is_valid(cls, strategy: str) -> bool:
+        """Check if a strategy name is valid."""
+        return strategy.lower() in cls.values()
+
+
+class ToolUsePolicy(str, Enum):
+    """Policies controlling when and how tools are used.
+
+    Use these enum values with `with_tool_use_policy()` for type-safe configuration:
+
+    Example:
+        builder.with_tool_use_policy(ToolUsePolicy.ADAPTIVE)
+    """
+
+    ALWAYS = "always"
+    REQUIRED_ONLY = "required_only"
+    ADAPTIVE = "adaptive"
+    NEVER = "never"
+
+    @classmethod
+    def values(cls) -> List[str]:
+        """Get all supported policy names."""
+        return [p.value for p in cls]
+
+    @classmethod
+    def is_valid(cls, policy: str) -> bool:
+        """Check if a policy name is valid."""
+        return policy.lower() in cls.values()
+
+
 class BuilderValidationError(ValueError):
     """Exception raised when builder configuration is invalid.
 
     Provides detailed error messages with suggestions for valid values.
     """
 
-    def __init__(self, message: str, field: str, valid_options: Optional[List[str]] = None):
+    def __init__(
+        self, message: str, field: str, valid_options: Optional[List[str]] = None
+    ):
         self.field = field
         self.valid_options = valid_options
         full_message = f"Builder validation error for '{field}': {message}"
@@ -764,9 +815,41 @@ class ReactiveAgentBuilder:
         self._config["enable_context_summarization"] = value
         return self
 
-    def with_context_pruning_strategy(self, value: str) -> "ReactiveAgentBuilder":
-        """Set the context pruning strategy ('conservative', 'balanced', 'aggressive')."""
-        self._config["context_pruning_strategy"] = value
+    def with_context_pruning_strategy(
+        self, strategy: Union[ContextPruningStrategy, str]
+    ) -> "ReactiveAgentBuilder":
+        """Set the context pruning strategy.
+
+        Args:
+            strategy: Either a ContextPruningStrategy enum or a string strategy name.
+
+        Available strategies:
+        - CONSERVATIVE: Minimal pruning, keeps more context
+        - BALANCED: Moderate pruning (default)
+        - AGGRESSIVE: Maximum pruning for token efficiency
+
+        Raises:
+            BuilderValidationError: If strategy is invalid
+
+        Examples:
+            # Using enum (recommended)
+            builder.with_context_pruning_strategy(ContextPruningStrategy.BALANCED)
+
+            # Using string (still supported)
+            builder.with_context_pruning_strategy("balanced")
+        """
+        # Convert string to enum if needed
+        if isinstance(strategy, str):
+            strategy_lower = strategy.lower()
+            if not ContextPruningStrategy.is_valid(strategy_lower):
+                raise BuilderValidationError(
+                    f"Unknown context pruning strategy '{strategy}'",
+                    field="context_pruning_strategy",
+                    valid_options=ContextPruningStrategy.values(),
+                )
+            strategy = ContextPruningStrategy(strategy_lower)
+
+        self._config["context_pruning_strategy"] = strategy.value
         return self
 
     def with_context_token_budget(self, value: int) -> "ReactiveAgentBuilder":
@@ -774,9 +857,41 @@ class ReactiveAgentBuilder:
         self._config["context_token_budget"] = value
         return self
 
-    def with_context_pruning_aggressiveness(self, value: str) -> "ReactiveAgentBuilder":
-        """Set the aggressiveness of context pruning ('conservative', 'balanced', 'aggressive')."""
-        self._config["context_pruning_aggressiveness"] = value
+    def with_context_pruning_aggressiveness(
+        self, aggressiveness: Union[ContextPruningStrategy, str]
+    ) -> "ReactiveAgentBuilder":
+        """Set the aggressiveness of context pruning.
+
+        Args:
+            aggressiveness: Either a ContextPruningStrategy enum or a string value.
+
+        Available levels:
+        - CONSERVATIVE: Minimal pruning (keeps more context)
+        - BALANCED: Moderate pruning (default)
+        - AGGRESSIVE: Maximum pruning (prioritizes token efficiency)
+
+        Raises:
+            BuilderValidationError: If aggressiveness level is invalid
+
+        Examples:
+            # Using enum (recommended)
+            builder.with_context_pruning_aggressiveness(ContextPruningStrategy.AGGRESSIVE)
+
+            # Using string (still supported)
+            builder.with_context_pruning_aggressiveness("aggressive")
+        """
+        # Convert string to enum if needed
+        if isinstance(aggressiveness, str):
+            aggressiveness_lower = aggressiveness.lower()
+            if not ContextPruningStrategy.is_valid(aggressiveness_lower):
+                raise BuilderValidationError(
+                    f"Unknown context pruning aggressiveness '{aggressiveness}'",
+                    field="context_pruning_aggressiveness",
+                    valid_options=ContextPruningStrategy.values(),
+                )
+            aggressiveness = ContextPruningStrategy(aggressiveness_lower)
+
+        self._config["context_pruning_aggressiveness"] = aggressiveness.value
         return self
 
     def with_context_summarization_frequency(
@@ -786,9 +901,42 @@ class ReactiveAgentBuilder:
         self._config["context_summarization_frequency"] = value
         return self
 
-    def with_tool_use_policy(self, value: str) -> "ReactiveAgentBuilder":
-        """Set the tool use policy ('always', 'required_only', 'adaptive', 'never')."""
-        self._config["tool_use_policy"] = value
+    def with_tool_use_policy(
+        self, policy: Union[ToolUsePolicy, str]
+    ) -> "ReactiveAgentBuilder":
+        """Set the tool use policy.
+
+        Args:
+            policy: Either a ToolUsePolicy enum or a string policy name.
+
+        Available policies:
+        - ALWAYS: Always attempt to use tools when available
+        - REQUIRED_ONLY: Only use tools when explicitly required
+        - ADAPTIVE: Dynamically decide based on task requirements (default)
+        - NEVER: Never use tools
+
+        Raises:
+            BuilderValidationError: If policy is invalid
+
+        Examples:
+            # Using enum (recommended)
+            builder.with_tool_use_policy(ToolUsePolicy.ADAPTIVE)
+
+            # Using string (still supported)
+            builder.with_tool_use_policy("adaptive")
+        """
+        # Convert string to enum if needed
+        if isinstance(policy, str):
+            policy_lower = policy.lower()
+            if not ToolUsePolicy.is_valid(policy_lower):
+                raise BuilderValidationError(
+                    f"Unknown tool use policy '{policy}'",
+                    field="tool_use_policy",
+                    valid_options=ToolUsePolicy.values(),
+                )
+            policy = ToolUsePolicy(policy_lower)
+
+        self._config["tool_use_policy"] = policy.value
         return self
 
     def with_tool_use_max_consecutive_calls(self, value: int) -> "ReactiveAgentBuilder":
@@ -1411,7 +1559,9 @@ class ReactiveAgentBuilder:
             # Step 1: Create AgentConfig from builder fields
             # =========================================================================
             agent_config = self._create_agent_config()
-            self._logger.info(f"Created AgentConfig for agent: {agent_config.agent_name}")
+            self._logger.info(
+                f"Created AgentConfig for agent: {agent_config.agent_name}"
+            )
 
             # =========================================================================
             # Step 2: Initialize MCP client if needed (before component creation)
@@ -1483,7 +1633,9 @@ class ReactiveAgentBuilder:
                                 event_type, callback
                             )
 
-            self._logger.info(f"Successfully built ReactiveAgent: {agent_config.agent_name}")
+            self._logger.info(
+                f"Successfully built ReactiveAgent: {agent_config.agent_name}"
+            )
             return agent
 
         except Exception as e:
@@ -1513,24 +1665,34 @@ class ReactiveAgentBuilder:
         config_mapping = {
             # Core Identity
             "agent_name": self._config.get("agent_name", "ReactiveAgent"),
-            "provider_model_name": self._config.get("provider_model_name", "ollama:cogito:14b"),
+            "provider_model_name": self._config.get(
+                "provider_model_name", "ollama:cogito:14b"
+            ),
             "instructions": self._config.get("instructions", ""),
             "role": self._config.get("role", ""),
             "role_instructions": self._config.get("role_instructions", {}),
-
             # Feature Flags
             "tool_use_enabled": self._config.get("tool_use_enabled", True),
             "reflect_enabled": self._config.get("reflect_enabled", False),
             "use_memory_enabled": self._config.get("use_memory_enabled", True),
-            "collect_metrics_enabled": self._config.get("collect_metrics_enabled", True),
+            "collect_metrics_enabled": self._config.get(
+                "collect_metrics_enabled", True
+            ),
             "vector_memory_enabled": self._config.get("vector_memory_enabled", False),
-            "enable_state_observation": self._config.get("enable_state_observation", True),
-            "enable_reactive_execution": self._config.get("enable_reactive_execution", True),
-            "enable_dynamic_strategy_switching": self._config.get("enable_dynamic_strategy_switching", False),
+            "enable_state_observation": self._config.get(
+                "enable_state_observation", True
+            ),
+            "enable_reactive_execution": self._config.get(
+                "enable_reactive_execution", True
+            ),
+            "enable_dynamic_strategy_switching": self._config.get(
+                "enable_dynamic_strategy_switching", False
+            ),
             "enable_context_pruning": self._config.get("enable_context_pruning", True),
-            "enable_context_summarization": self._config.get("enable_context_summarization", True),
+            "enable_context_summarization": self._config.get(
+                "enable_context_summarization", True
+            ),
             "enable_caching": self._config.get("enable_caching", True),
-
             # Execution Parameters
             "max_iterations": self._config.get("max_iterations"),
             "max_task_retries": self._config.get("max_task_retries", 3),
@@ -1538,25 +1700,29 @@ class ReactiveAgentBuilder:
             "min_completion_score": self._config.get("min_completion_score", 1.0),
             "cache_ttl": self._config.get("cache_ttl", 3600),
             "offline_mode": self._config.get("offline_mode", False),
-
             # Context Management
             "max_context_messages": self._config.get("max_context_messages", 20),
             "max_context_tokens": self._config.get("max_context_tokens"),
-            "context_pruning_strategy": self._config.get("context_pruning_strategy", "balanced"),
+            "context_pruning_strategy": self._config.get(
+                "context_pruning_strategy", "balanced"
+            ),
             "context_token_budget": self._config.get("context_token_budget"),
-            "context_pruning_aggressiveness": self._config.get("context_pruning_aggressiveness", 0.5),
-            "context_summarization_frequency": self._config.get("context_summarization_frequency", 10),
+            "context_pruning_aggressiveness": self._config.get(
+                "context_pruning_aggressiveness", 0.5
+            ),
+            "context_summarization_frequency": self._config.get(
+                "context_summarization_frequency", 10
+            ),
             "response_format": self._config.get("response_format"),
             "reasoning_strategy": self._config.get("reasoning_strategy", "adaptive"),
-
             # Tool Configuration
             "tool_use_policy": self._config.get("tool_use_policy", "always"),
-            "tool_use_max_consecutive_calls": self._config.get("tool_use_max_consecutive_calls", 5),
+            "tool_use_max_consecutive_calls": self._config.get(
+                "tool_use_max_consecutive_calls", 5
+            ),
             "check_tool_feasibility": self._config.get("check_tool_feasibility", False),
-
             # Vector Memory Configuration
             "vector_memory_collection": self._config.get("vector_memory_collection"),
-
             # Model Provider Options
             "model_provider_options": self._config.get("model_provider_options", {}),
         }
@@ -1591,7 +1757,9 @@ class ReactiveAgentBuilder:
             return self._mcp_client
 
         # Check if MCP is configured
-        mcp_server_filter = self._mcp_server_filter or self._config.get("mcp_server_filter")
+        mcp_server_filter = self._mcp_server_filter or self._config.get(
+            "mcp_server_filter"
+        )
         mcp_config = self._mcp_config or self._config.get("mcp_config")
 
         if not mcp_server_filter and not mcp_config:

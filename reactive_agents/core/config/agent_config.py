@@ -11,8 +11,15 @@ for an agent. By separating configuration from runtime state, we achieve:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, Optional, Literal, Callable, Awaitable, Union, Tuple
+from typing import Dict, Any, Optional, Literal, Callable, Awaitable, Union, Tuple, List
+
+from reactive_agents.config.validation import (
+    validate_model_format,
+    validate_reasoning_strategy,
+    ConfigurationValidationError,
+)
 
 
 @dataclass(frozen=True)
@@ -178,19 +185,22 @@ class AgentConfig:
     """Options passed to the LLM model provider."""
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AgentConfig":
+    def from_dict(cls, data: Dict[str, Any], warn_unknown: bool = True) -> "AgentConfig":
         """
         Create an AgentConfig instance from a dictionary.
 
-        This factory method filters out any unknown keys and creates
-        a new AgentConfig with the provided values.
+        This factory method validates configuration values and warns about
+        unknown keys before creating a new AgentConfig.
 
         Args:
             data: Dictionary containing configuration values.
-                  Unknown keys are silently ignored.
+            warn_unknown: If True (default), emit warnings for unknown keys.
 
         Returns:
             A new AgentConfig instance with the provided configuration.
+
+        Raises:
+            ConfigurationValidationError: If any configuration value is invalid.
 
         Example:
             >>> config = AgentConfig.from_dict({
@@ -202,8 +212,33 @@ class AgentConfig:
         # Get the set of valid field names from the dataclass
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
 
-        # Filter out any unknown keys
+        # Warn about unknown keys
+        unknown_keys = set(data.keys()) - valid_fields
+        if unknown_keys and warn_unknown:
+            warnings.warn(
+                f"AgentConfig: Unknown configuration keys will be ignored: "
+                f"{', '.join(sorted(unknown_keys))}. "
+                f"Valid keys: {', '.join(sorted(valid_fields))}",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        # Filter to valid keys
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+
+        # Validate provider_model_name if present
+        if "provider_model_name" in filtered_data:
+            validate_model_format(
+                filtered_data["provider_model_name"],
+                field="provider_model_name",
+            )
+
+        # Validate reasoning_strategy if present
+        if "reasoning_strategy" in filtered_data:
+            filtered_data["reasoning_strategy"] = validate_reasoning_strategy(
+                filtered_data["reasoning_strategy"],
+                field="reasoning_strategy",
+            )
 
         return cls(**filtered_data)
 

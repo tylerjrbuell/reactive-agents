@@ -4,7 +4,7 @@ Reactive Agents Framework
 A powerful, intuitive framework for building AI agents with multiple reasoning strategies.
 
 Quick Start:
-    from reactive_agents import ReactiveAgentBuilder, tool, ReasoningStrategies
+    from reactive_agents import ReactiveAgentBuilder, Provider, ReasoningStrategies, tool
 
     @tool()
     async def my_tool(query: str) -> str:
@@ -14,7 +14,7 @@ Quick Start:
     agent = await (
         ReactiveAgentBuilder()
         .with_name("MyAgent")
-        .with_model("ollama:llama3")
+        .with_model(Provider.OLLAMA, "llama3")
         .with_reasoning_strategy(ReasoningStrategies.REACTIVE)
         .with_custom_tools([my_tool])
         .build()
@@ -31,6 +31,13 @@ from reactive_agents.app.builders.agent import ReactiveAgentBuilder
 
 # Tool creation
 from reactive_agents.core.tools.decorators import tool, create_tool_from_function
+
+# Builder enums for type-safe configuration
+from reactive_agents.app.builders.agent import (
+    Provider,
+    ContextPruningStrategy,
+    ToolUsePolicy,
+)
 
 # Types and enums
 from reactive_agents.core.types.reasoning_types import ReasoningStrategies
@@ -52,6 +59,10 @@ __all__ = [
     # Tool creation
     "tool",
     "create_tool_from_function",
+    # Builder enums for type-safe configuration
+    "Provider",
+    "ContextPruningStrategy",
+    "ToolUsePolicy",
     # Types and enums
     "ReasoningStrategies",
     "ExecutionResult",

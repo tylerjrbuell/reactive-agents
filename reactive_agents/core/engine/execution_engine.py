@@ -23,9 +23,6 @@ from reactive_agents.core.reasoning.recovery import (
     ErrorRecoveryOrchestrator,
     ErrorContext,
 )
-from reactive_agents.core.reasoning.performance_monitor import (
-    StrategyPerformanceMonitor,
-)
 
 if TYPE_CHECKING:
     from reactive_agents.app.agents.base import Agent
@@ -87,15 +84,12 @@ class ExecutionEngine:
         # Error recovery orchestrator for intelligent error handling
         self.error_recovery = ErrorRecoveryOrchestrator()
 
-        # Performance monitor for strategy optimization
-        self.performance_monitor = StrategyPerformanceMonitor()
-
         # Current execution tracking
         self.current_execution_id: str = str(uuid.uuid4())
 
         if self.agent_logger:
             self.agent_logger.info(
-                "🏗️  Core systems initialized | State machine, error recovery, performance monitoring ready"
+                "🏗️  Core systems initialized | State machine, error recovery ready"
             )
 
     async def execute(
@@ -133,13 +127,11 @@ class ExecutionEngine:
             # Select strategy based on configuration and performance data
             await self._select_strategy(initial_task)
 
-            # Start performance tracking
-            self.performance_monitor.start_execution_tracking(
-                self.current_execution_id,
-                self.strategy_manager.get_current_strategy_name(),
-                initial_task,
-                {"session_id": self.context.session.session_id},
-            )
+            # Start performance tracking via unified metrics manager
+            if self.context.metrics_manager:
+                self.context.metrics_manager.start_strategy_execution(
+                    self.strategy_manager.get_current_strategy_name()
+                )
 
             # Initialize the active strategy for this task
             reasoning_context = ReasoningContext(
@@ -159,17 +151,14 @@ class ExecutionEngine:
                 initial_task, cancellation_event, reasoning_context
             )
 
-            # Complete performance tracking
-            completion_score = 1.0 if result.get("final_answer") else 0.0
-            self.performance_monitor.complete_execution_tracking(
-                self.current_execution_id,
-                success=bool(result.get("final_answer")),
-                completion_score=completion_score,
-                final_metadata={
-                    "iterations": result.get("total_iterations", 0),
-                    "strategy": result.get("strategy", "unknown"),
-                },
-            )
+            # Complete performance tracking via unified metrics manager
+            if self.context.metrics_manager:
+                completion_score = 1.0 if result.get("final_answer") else 0.0
+                self.context.metrics_manager.complete_strategy_execution(
+                    success=bool(result.get("final_answer")),
+                    completion_score=completion_score,
+                    iterations=result.get("total_iterations", 0),
+                )
 
             # Transition to completion state
             await self.state_machine.transition_to(
@@ -252,14 +241,14 @@ class ExecutionEngine:
         if strategy_name == "adaptive" and dynamic_switching:
             # Check if we should switch based on performance
             current_strategy = self.strategy_manager.get_current_strategy_name()
-            if current_strategy:
-                recommended_switch = self.performance_monitor.should_switch_strategy(
+            if current_strategy and self.context.metrics_manager:
+                recommended_switch = self.context.metrics_manager.should_switch_strategy(
                     current_strategy
                 )
                 if recommended_switch:
                     if self.agent_logger:
                         self.agent_logger.info(
-                            f"🔄 Performance monitor recommends switching from {current_strategy} to {recommended_switch}"
+                            f"🔄 Metrics manager recommends switching from {current_strategy} to {recommended_switch}"
                         )
                     strategy_name = recommended_switch
 
@@ -268,7 +257,11 @@ class ExecutionEngine:
                 classification = await self.task_classifier.classify_task(task)
 
                 # Get performance rankings to inform selection
-                strategy_rankings = self.performance_monitor.get_strategy_rankings()
+                strategy_rankings = (
+                    self.context.metrics_manager.get_strategy_rankings()
+                    if self.context.metrics_manager
+                    else []
+                )
 
                 reasoning_context = ReasoningContext(
                     current_strategy=self.strategy_manager.get_current_strategy_enum()
@@ -366,11 +359,7 @@ class ExecutionEngine:
                     self.agent_logger.info("▶️  ExecutionEngine | Resumed execution")
 
             self.context.session.iterations += 1
-            # Update performance monitoring
-            self.performance_monitor.update_execution_progress(
-                self.current_execution_id,
-                iterations=self.context.session.iterations,
-            )
+            # Note: Metrics tracked via MetricsManager at strategy completion
 
             if self.agent_logger:
                 self.agent_logger.info(
@@ -527,13 +516,6 @@ class ExecutionEngine:
             Exception(error_payload.error_message), error_context
         )
 
-        # Update performance monitoring
-        self.performance_monitor.update_execution_progress(
-            self.current_execution_id,
-            error_count=len(self.context.session.errors),
-            error_message=error_payload.error_message,
-        )
-
         # Record error in session
         self.context.session.add_error(
             source="Strategy",
@@ -584,13 +566,6 @@ class ExecutionEngine:
         # Use error recovery orchestrator
         await self.error_recovery.handle_error(error, error_context)
 
-        # Update performance monitoring
-        self.performance_monitor.update_execution_progress(
-            self.current_execution_id,
-            error_count=len(self.context.session.errors),
-            error_message=str(error),
-        )
-
         # Record error in session
         self.context.session.add_error(
             source="ExecutionEngineLoop",
@@ -631,16 +606,12 @@ class ExecutionEngine:
         # Use error recovery orchestrator
         await self.error_recovery.handle_error(error, error_context)
 
-        # Complete performance tracking with failure
-        self.performance_monitor.complete_execution_tracking(
-            self.current_execution_id,
-            success=False,
-            completion_score=0.0,
-            final_metadata={
-                "error": str(error),
-                "error_type": type(error).__name__,
-            },
-        )
+        # Complete performance tracking with failure via unified metrics manager
+        if self.context.metrics_manager:
+            self.context.metrics_manager.complete_strategy_execution(
+                success=False,
+                completion_score=0.0,
+            )
 
         # Record error in session
         self.context.session.add_error(

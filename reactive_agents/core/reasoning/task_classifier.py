@@ -5,12 +5,11 @@ from reactive_agents.core.types.task_types import (
     TaskType,
     TaskClassification,
 )
-from reactive_agents.core.reasoning.performance_monitor import (
-    StrategyPerformanceMonitor,
-)
+from reactive_agents.core.types.provider_types import CompletionResponse
 
 if TYPE_CHECKING:
     from reactive_agents.core.context.agent_context import AgentContext
+    from reactive_agents.core.metrics.metrics_manager import MetricsManager
 
 
 class TaskClassifier:
@@ -20,18 +19,11 @@ class TaskClassifier:
         self.context = context
         self.agent_logger = context.agent_logger
         self.model_provider = context.model_provider
-        self.performance_monitor: Optional[StrategyPerformanceMonitor] = None
 
-    def set_performance_monitor(
-        self, performance_monitor: StrategyPerformanceMonitor
-    ) -> None:
-        """
-        Set the performance monitor for strategy recommendation enhancement.
-
-        Args:
-            performance_monitor: The performance monitor instance
-        """
-        self.performance_monitor = performance_monitor
+    @property
+    def metrics_manager(self) -> Optional["MetricsManager"]:
+        """Get metrics manager from context for performance-based recommendations."""
+        return self.context.metrics_manager
 
     async def classify_task_with_performance(
         self, task: str, context_messages: Optional[List[Dict[str, Any]]] = None
@@ -58,9 +50,9 @@ class TaskClassifier:
             "confidence_adjustment": 0.0,
         }
 
-        # Add performance-based recommendations if monitor is available
-        if self.performance_monitor:
-            strategy_rankings = self.performance_monitor.get_strategy_rankings()
+        # Add performance-based recommendations if metrics manager is available
+        if self.metrics_manager:
+            strategy_rankings = self.metrics_manager.get_strategy_rankings()
             enhanced_result["strategy_rankings"] = strategy_rankings
 
             # Get task-type specific recommendations
@@ -247,17 +239,21 @@ class TaskClassifier:
         Returns:
             Summary of strategy performance information
         """
-        if not self.performance_monitor:
-            return {"available": False, "message": "No performance monitor configured"}
+        if not self.metrics_manager:
+            return {"available": False, "message": "No metrics manager configured"}
 
-        rankings = self.performance_monitor.get_strategy_rankings()
-        summary = self.performance_monitor.get_performance_summary()
+        rankings = self.metrics_manager.get_strategy_rankings()
+        metrics = self.metrics_manager.get_metrics()
 
         return {
             "available": True,
             "total_strategies": len(rankings),
             "strategy_rankings": rankings,
-            "performance_summary": summary,
+            "performance_summary": {
+                "total_tool_calls": metrics.get("tool_calls", 0),
+                "total_iterations": metrics.get("iterations", 0),
+                "strategy_performance": metrics.get("strategy_performance", {}),
+            },
             "recommendations": {
                 "high_performing": [name for name, score in rankings if score > 0.7],
                 "needs_improvement": [name for name, score in rankings if score < 0.4],
@@ -300,15 +296,16 @@ class TaskClassifier:
                 options=self.context.model_provider_options,
             )
 
-            if response and response.message.content:
+            if response and isinstance(response, CompletionResponse) and response.message.content:
                 # Log the raw response for debugging
+                response_content = response.message.content
                 if self.agent_logger:
                     self.agent_logger.debug(
-                        f"Raw classification response: {response.message.content[:500]}..."
+                        f"Raw classification response: {response_content[:500]}..."
                     )
 
                 try:
-                    classification_data = json.loads(response.message.content)
+                    classification_data = json.loads(response_content)
 
                     # Validate that we have the required fields
                     if not isinstance(classification_data, dict):
@@ -352,7 +349,7 @@ class TaskClassifier:
                 except (json.JSONDecodeError, ValueError) as parse_error:
                     if self.agent_logger:
                         self.agent_logger.warning(
-                            f"JSON parsing/validation failed: {parse_error}. Content: {response.message.content[:200]}..."
+                            f"JSON parsing/validation failed: {parse_error}. Content: {response_content[:200]}..."
                         )
                     raise
             else:

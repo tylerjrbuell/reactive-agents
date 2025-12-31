@@ -12,17 +12,20 @@ This module tests:
 
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from typing import List, Dict, Any
 
 from reactive_agents.app.builders import (
     ReactiveAgentBuilder,
     quick_create_agent,
     ConfirmationConfig,
     ToolConfig,
+    Provider,
+    ContextPruningStrategy,
+    ToolUsePolicy,
+    BuilderValidationError,
 )
 from reactive_agents.config.logging import LogLevel
 from reactive_agents.core.tools.decorators import tool
-from reactive_agents.core.tools.base import Tool
+from reactive_agents.core.types.reasoning_types import ReasoningStrategies
 
 
 # Custom tools for testing
@@ -466,9 +469,7 @@ async def test_add_custom_tools_to_agent():
     "reactive_agents.providers.llm.ollama.OllamaModelProvider", new_callable=MagicMock
 )
 @patch("reactive_agents.app.builders.agent.ReactiveAgentBuilder")
-async def test_quick_create_agent(
-    mock_builder_class, mock_ollama_provider_class, model_validation_bypass
-):
+async def test_quick_create_agent(mock_builder_class, mock_ollama_provider_class):
     """Test the quick_create_agent function"""
     # Configure the mocked OllamaModelProvider instance
     mock_ollama_provider_instance = MagicMock()
@@ -583,3 +584,304 @@ def test_confirmation_config_model():
     assert config_dict["enabled"] is False
     assert config_dict["strategy"] == "selective"
     assert config_dict["excluded_tools"] == ["tool1", "tool2"]
+
+
+# Provider Enum Tests
+class TestProviderEnum:
+    """Tests for the Provider enum."""
+
+    def test_provider_values(self):
+        """Test that all expected providers are defined."""
+        assert Provider.ANTHROPIC.value == "anthropic"
+        assert Provider.OPENAI.value == "openai"
+        assert Provider.OLLAMA.value == "ollama"
+        assert Provider.GROQ.value == "groq"
+        assert Provider.GOOGLE.value == "google"
+
+    def test_provider_values_list(self):
+        """Test the values() class method."""
+        values = Provider.values()
+        assert "anthropic" in values
+        assert "openai" in values
+        assert "ollama" in values
+        assert "groq" in values
+        assert "google" in values
+
+    def test_provider_is_valid(self):
+        """Test the is_valid() class method."""
+        assert Provider.is_valid("anthropic") is True
+        assert Provider.is_valid("OPENAI") is True  # Case insensitive
+        assert Provider.is_valid("invalid_provider") is False
+
+
+# Builder Validation Tests
+class TestBuilderValidation:
+    """Tests for builder validation and error handling."""
+
+    def test_with_model_provider_enum(self, basic_builder):
+        """Test with_model using Provider enum."""
+        builder = basic_builder.with_model(Provider.ANTHROPIC, "claude-3-sonnet-20240229")
+        assert builder._config["provider_model_name"] == "anthropic:claude-3-sonnet-20240229"
+
+    def test_with_model_invalid_format(self, basic_builder):
+        """Test that invalid model format raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_model("gpt-4")  # Missing provider prefix
+
+        error = exc_info.value
+        assert error.field == "model"
+        assert "provider:model" in str(error)
+
+    def test_with_model_unknown_provider(self, basic_builder):
+        """Test that unknown provider raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_model("unknown:model-name")
+
+        error = exc_info.value
+        assert error.field == "model"
+        assert "unknown" in str(error).lower()
+
+    def test_with_model_provider_enum_missing_model(self, basic_builder):
+        """Test that Provider enum without model name raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_model(Provider.OPENAI)  # Missing model name
+
+        error = exc_info.value
+        assert error.field == "model"
+
+
+# Reasoning Strategy Tests
+class TestReasoningStrategyBuilder:
+    """Tests for reasoning strategy configuration in builder."""
+
+    def test_with_reasoning_strategy_enum(self, basic_builder):
+        """Test with_reasoning_strategy using enum."""
+        builder = basic_builder.with_reasoning_strategy(ReasoningStrategies.REACTIVE)
+        assert builder._config["reasoning_strategy"] == ReasoningStrategies.REACTIVE
+
+    def test_with_reasoning_strategy_string(self, basic_builder):
+        """Test with_reasoning_strategy using string."""
+        builder = basic_builder.with_reasoning_strategy("adaptive")
+        assert builder._config["reasoning_strategy"] == ReasoningStrategies.ADAPTIVE
+
+    def test_with_reasoning_strategy_invalid(self, basic_builder):
+        """Test that invalid strategy raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_reasoning_strategy("invalid_strategy")
+
+        error = exc_info.value
+        assert error.field == "reasoning_strategy"
+
+    def test_get_available_strategies(self):
+        """Test the get_available_strategies static method."""
+        strategies = ReactiveAgentBuilder.get_available_strategies()
+        assert "reactive" in strategies
+        assert "adaptive" in strategies
+        assert "reflect_decide_act" in strategies
+        assert "plan_execute_reflect" in strategies
+
+    def test_all_reasoning_strategies(self):
+        """Test that all ReasoningStrategies enum values work."""
+        for strategy in ReasoningStrategies:
+            builder = ReactiveAgentBuilder()
+            builder.with_reasoning_strategy(strategy)
+            assert builder._config["reasoning_strategy"] == strategy
+
+
+# Type-safe Builder Pattern Tests
+class TestTypeSafeBuilder:
+    """Tests for type-safe builder usage patterns."""
+
+    def test_fluent_interface_with_enums(self, basic_builder):
+        """Test fluent interface using enums throughout."""
+        builder = (
+            basic_builder
+            .with_name("TestAgent")
+            .with_model(Provider.ANTHROPIC, "claude-3-sonnet-20240229")
+            .with_reasoning_strategy(ReasoningStrategies.ADAPTIVE)
+            .with_log_level(LogLevel.DEBUG)
+            .with_max_iterations(10)
+        )
+
+        assert builder._config["agent_name"] == "TestAgent"
+        assert builder._config["provider_model_name"] == "anthropic:claude-3-sonnet-20240229"
+        assert builder._config["reasoning_strategy"] == ReasoningStrategies.ADAPTIVE
+        assert builder._config["log_level"] == "debug"
+        assert builder._config["max_iterations"] == 10
+
+    def test_builder_error_messages_include_valid_options(self, basic_builder):
+        """Test that error messages include valid options."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_model("bad_provider:model")
+
+        error_str = str(exc_info.value)
+        # Should include valid provider names
+        assert "anthropic" in error_str or "openai" in error_str
+
+
+# Context Pruning Strategy Enum Tests
+class TestContextPruningStrategyEnum:
+    """Tests for the ContextPruningStrategy enum."""
+
+    def test_strategy_values(self):
+        """Test that all expected strategies are defined."""
+        assert ContextPruningStrategy.CONSERVATIVE.value == "conservative"
+        assert ContextPruningStrategy.BALANCED.value == "balanced"
+        assert ContextPruningStrategy.AGGRESSIVE.value == "aggressive"
+
+    def test_strategy_values_list(self):
+        """Test the values() class method."""
+        values = ContextPruningStrategy.values()
+        assert "conservative" in values
+        assert "balanced" in values
+        assert "aggressive" in values
+
+    def test_strategy_is_valid(self):
+        """Test the is_valid() class method."""
+        assert ContextPruningStrategy.is_valid("conservative") is True
+        assert ContextPruningStrategy.is_valid("BALANCED") is True  # Case insensitive
+        assert ContextPruningStrategy.is_valid("invalid") is False
+
+
+class TestContextPruningStrategyBuilder:
+    """Tests for context pruning strategy configuration in builder."""
+
+    def test_with_context_pruning_strategy_enum(self, basic_builder):
+        """Test with_context_pruning_strategy using enum."""
+        builder = basic_builder.with_context_pruning_strategy(
+            ContextPruningStrategy.AGGRESSIVE
+        )
+        assert builder._config["context_pruning_strategy"] == "aggressive"
+
+    def test_with_context_pruning_strategy_string(self, basic_builder):
+        """Test with_context_pruning_strategy using string."""
+        builder = basic_builder.with_context_pruning_strategy("balanced")
+        assert builder._config["context_pruning_strategy"] == "balanced"
+
+    def test_with_context_pruning_strategy_invalid(self, basic_builder):
+        """Test that invalid strategy raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_context_pruning_strategy("invalid_strategy")
+
+        error = exc_info.value
+        assert error.field == "context_pruning_strategy"
+        assert error.valid_options is not None
+        assert "conservative" in error.valid_options
+
+    def test_with_context_pruning_aggressiveness_enum(self, basic_builder):
+        """Test with_context_pruning_aggressiveness using enum."""
+        builder = basic_builder.with_context_pruning_aggressiveness(
+            ContextPruningStrategy.CONSERVATIVE
+        )
+        assert builder._config["context_pruning_aggressiveness"] == "conservative"
+
+    def test_with_context_pruning_aggressiveness_string(self, basic_builder):
+        """Test with_context_pruning_aggressiveness using string."""
+        builder = basic_builder.with_context_pruning_aggressiveness("aggressive")
+        assert builder._config["context_pruning_aggressiveness"] == "aggressive"
+
+    def test_with_context_pruning_aggressiveness_invalid(self, basic_builder):
+        """Test that invalid aggressiveness raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_context_pruning_aggressiveness("invalid")
+
+        error = exc_info.value
+        assert error.field == "context_pruning_aggressiveness"
+
+
+# Tool Use Policy Enum Tests
+class TestToolUsePolicyEnum:
+    """Tests for the ToolUsePolicy enum."""
+
+    def test_policy_values(self):
+        """Test that all expected policies are defined."""
+        assert ToolUsePolicy.ALWAYS.value == "always"
+        assert ToolUsePolicy.REQUIRED_ONLY.value == "required_only"
+        assert ToolUsePolicy.ADAPTIVE.value == "adaptive"
+        assert ToolUsePolicy.NEVER.value == "never"
+
+    def test_policy_values_list(self):
+        """Test the values() class method."""
+        values = ToolUsePolicy.values()
+        assert "always" in values
+        assert "required_only" in values
+        assert "adaptive" in values
+        assert "never" in values
+
+    def test_policy_is_valid(self):
+        """Test the is_valid() class method."""
+        assert ToolUsePolicy.is_valid("always") is True
+        assert ToolUsePolicy.is_valid("ADAPTIVE") is True  # Case insensitive
+        assert ToolUsePolicy.is_valid("invalid") is False
+
+
+class TestToolUsePolicyBuilder:
+    """Tests for tool use policy configuration in builder."""
+
+    def test_with_tool_use_policy_enum(self, basic_builder):
+        """Test with_tool_use_policy using enum."""
+        builder = basic_builder.with_tool_use_policy(ToolUsePolicy.NEVER)
+        assert builder._config["tool_use_policy"] == "never"
+
+    def test_with_tool_use_policy_string(self, basic_builder):
+        """Test with_tool_use_policy using string."""
+        builder = basic_builder.with_tool_use_policy("required_only")
+        assert builder._config["tool_use_policy"] == "required_only"
+
+    def test_with_tool_use_policy_invalid(self, basic_builder):
+        """Test that invalid policy raises error."""
+        with pytest.raises(BuilderValidationError) as exc_info:
+            basic_builder.with_tool_use_policy("sometimes")
+
+        error = exc_info.value
+        assert error.field == "tool_use_policy"
+        assert error.valid_options is not None
+        assert "always" in error.valid_options
+
+    def test_all_tool_use_policies(self):
+        """Test that all ToolUsePolicy enum values work."""
+        for policy in ToolUsePolicy:
+            builder = ReactiveAgentBuilder()
+            builder.with_tool_use_policy(policy)
+            assert builder._config["tool_use_policy"] == policy.value
+
+
+# Extended Type-safe Builder Pattern Tests
+class TestTypeSafeBuilderExtended:
+    """Extended tests for type-safe builder usage patterns with all enums."""
+
+    def test_fluent_interface_with_all_enums(self, basic_builder):
+        """Test fluent interface using all available enums."""
+        builder = (
+            basic_builder
+            .with_name("TestAgent")
+            .with_model(Provider.ANTHROPIC, "claude-3-sonnet-20240229")
+            .with_reasoning_strategy(ReasoningStrategies.ADAPTIVE)
+            .with_context_pruning_strategy(ContextPruningStrategy.BALANCED)
+            .with_context_pruning_aggressiveness(ContextPruningStrategy.AGGRESSIVE)
+            .with_tool_use_policy(ToolUsePolicy.ADAPTIVE)
+            .with_log_level(LogLevel.DEBUG)
+        )
+
+        assert builder._config["agent_name"] == "TestAgent"
+        assert builder._config["provider_model_name"] == "anthropic:claude-3-sonnet-20240229"
+        assert builder._config["reasoning_strategy"] == ReasoningStrategies.ADAPTIVE
+        assert builder._config["context_pruning_strategy"] == "balanced"
+        assert builder._config["context_pruning_aggressiveness"] == "aggressive"
+        assert builder._config["tool_use_policy"] == "adaptive"
+        assert builder._config["log_level"] == "debug"
+
+    def test_mixed_enum_and_string_configuration(self, basic_builder):
+        """Test that mixing enum and string values works correctly."""
+        builder = (
+            basic_builder
+            .with_model(Provider.OPENAI, "gpt-4")
+            .with_reasoning_strategy("reactive")  # String
+            .with_context_pruning_strategy(ContextPruningStrategy.CONSERVATIVE)  # Enum
+            .with_tool_use_policy("always")  # String
+        )
+
+        assert builder._config["provider_model_name"] == "openai:gpt-4"
+        assert builder._config["reasoning_strategy"] == ReasoningStrategies.REACTIVE
+        assert builder._config["context_pruning_strategy"] == "conservative"
+        assert builder._config["tool_use_policy"] == "always"

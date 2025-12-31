@@ -4,7 +4,7 @@ This module provides the FinalAnswerTool which is automatically injected
 into agents to allow them to provide final answers and conclude tasks.
 """
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 from pydantic import Field
 
 from reactive_agents.core.tools.base import Tool, ToolInput
@@ -12,9 +12,6 @@ from reactive_agents.core.tools.abstractions import ToolResult
 
 # Import ContextProtocol at runtime so Pydantic can resolve the forward reference
 from reactive_agents.core.context.context_protocol import ContextProtocol
-
-if TYPE_CHECKING:
-    pass
 
 
 class FinalAnswerInput(ToolInput):
@@ -67,7 +64,7 @@ class FinalAnswerTool(Tool):
         },
     }
 
-    def __init__(self, context: "AgentContext", **data):
+    def __init__(self, context: "ContextProtocol", **data):
         """Initialize the FinalAnswerTool.
 
         Args:
@@ -106,10 +103,22 @@ class FinalAnswerTool(Tool):
         """
         answer = params.get("answer")
         if answer is None:
-            return ToolResult("Error: Missing required parameter 'answer'.")
+            return ToolResult.fail(
+                error="Missing required parameter 'answer'.",
+                tool_name=self.name,
+            )
 
         if self.context is None:
-            return ToolResult("Error: Context not configured.")
+            return ToolResult.fail(
+                error="Context not configured.",
+                tool_name=self.name,
+            )
+
+        if self.context.session is None:
+            return ToolResult.fail(
+                error="Session not configured.",
+                tool_name=self.name,
+            )
 
         # Set the final answer in the context
         self.context.session.final_answer = answer
@@ -120,7 +129,7 @@ class FinalAnswerTool(Tool):
                 f"FinalAnswerTool: Set session.final_answer = {answer[:50] if answer else 'None'}..."
             )
 
-        return ToolResult(answer)
+        return ToolResult.ok(value=answer, tool_name=self.name)
 
     def __hash__(self) -> int:
         """Make FinalAnswerTool hashable."""

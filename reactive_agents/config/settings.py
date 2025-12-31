@@ -10,6 +10,13 @@ import os
 import json
 from dataclasses import dataclass, field
 
+from reactive_agents.config.validation import (
+    validate_provider,
+    validate_reasoning_strategy,
+    validate_log_level,
+    ConfigurationValidationError,
+)
+
 
 def get_package_root() -> Path:
     """Get the reactive_agents package root directory"""
@@ -81,6 +88,12 @@ class LLMSettings:
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4"
 
+    def __post_init__(self):
+        """Validate LLM settings after initialization."""
+        self.default_provider = validate_provider(
+            self.default_provider, field="llm.default_provider"
+        )
+
 
 @dataclass
 class AgentSettings:
@@ -102,6 +115,12 @@ class AgentSettings:
     # Workflow settings
     workflow_context_shared: bool = True
 
+    def __post_init__(self):
+        """Validate agent settings after initialization."""
+        self.default_strategy = validate_reasoning_strategy(
+            self.default_strategy, field="agent.default_strategy"
+        )
+
 
 @dataclass
 class PluginSettings:
@@ -122,6 +141,12 @@ class LoggingSettings:
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     log_file: Optional[str] = None
     log_to_console: bool = True
+
+    def __post_init__(self):
+        """Validate logging settings after initialization."""
+        self.log_level = validate_log_level(
+            self.log_level, field="logging.log_level"
+        ).upper()  # Log levels are typically uppercase
 
 
 @dataclass

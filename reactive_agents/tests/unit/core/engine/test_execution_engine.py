@@ -64,9 +64,15 @@ class TestExecutionEngine:
         context.enable_dynamic_strategy_switching = True
         context.reasoning_strategy = "reactive"
         context.emit_event = Mock()
+
+        # Unified metrics manager (replaces separate StrategyPerformanceMonitor)
         context.metrics_manager = Mock()
         context.metrics_manager.finalize_run_metrics = Mock()
         context.metrics_manager.get_metrics = Mock(return_value={})
+        context.metrics_manager.start_strategy_execution = Mock()
+        context.metrics_manager.complete_strategy_execution = Mock()
+        context.metrics_manager.should_switch_strategy = Mock(return_value=None)
+        context.metrics_manager.get_strategy_rankings = Mock(return_value=[])
 
         # Mock the context manager
         context.reasoning_engine.get_context_manager = Mock()
@@ -135,17 +141,6 @@ class TestExecutionEngine:
         return recovery
 
     @pytest.fixture
-    def mock_performance_monitor(self):
-        """Create a mock performance monitor."""
-        monitor = Mock()
-        monitor.start_execution_tracking = Mock()
-        monitor.update_execution_progress = Mock()
-        monitor.complete_execution_tracking = Mock()
-        monitor.should_switch_strategy = Mock(return_value=None)
-        monitor.get_strategy_rankings = Mock(return_value=[])
-        return monitor
-
-    @pytest.fixture
     def execution_engine(
         self,
         mock_agent,
@@ -153,7 +148,6 @@ class TestExecutionEngine:
         mock_task_classifier,
         mock_state_machine,
         mock_error_recovery,
-        mock_performance_monitor,
     ):
         """Create an execution engine instance with mocked dependencies."""
         with patch(
@@ -168,11 +162,7 @@ class TestExecutionEngine:
         ), patch(
             "reactive_agents.core.reasoning.recovery.ErrorRecoveryOrchestrator",
             return_value=mock_error_recovery,
-        ), patch(
-            "reactive_agents.core.reasoning.performance_monitor.StrategyPerformanceMonitor",
-            return_value=mock_performance_monitor,
         ):
-
             engine = ExecutionEngine(agent=mock_agent)
 
             # Inject mocks for easier testing
@@ -180,7 +170,6 @@ class TestExecutionEngine:
             engine.task_classifier = mock_task_classifier
             engine.state_machine = mock_state_machine
             engine.error_recovery = mock_error_recovery
-            engine.performance_monitor = mock_performance_monitor
 
             return engine
 
