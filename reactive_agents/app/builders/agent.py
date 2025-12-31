@@ -482,30 +482,69 @@ class ReactiveAgentBuilder:
 
     def with_tools(
         self,
+        tools: Optional[List[Any]] = None,
+        *,
         mcp_tools: Optional[List[str]] = None,
         custom_tools: Optional[List[Any]] = None,
     ) -> "ReactiveAgentBuilder":
         """
-        Configure both MCP and custom tools at once
+        Configure tools for the agent with automatic type detection.
 
-        This is a convenience method that combines with_mcp_tools and with_custom_tools
+        This method intelligently detects tool types:
+        - Strings are treated as MCP server names (e.g., "brave-search", "time")
+        - Functions/objects with `tool_definition` are treated as custom tools
 
         Args:
-            mcp_tools: List of MCP tool names to include
-            custom_tools: List of custom tool functions or objects
-        """
-        # Handle MCP tools
-        if mcp_tools:
-            self.with_mcp_tools(mcp_tools)
+            tools: Mixed list of tools - strings for MCP servers, decorated functions for custom tools
+            mcp_tools: (Deprecated) Explicit list of MCP tool names
+            custom_tools: (Deprecated) Explicit list of custom tool functions
 
-        # Handle custom tools
+        Examples:
+            # Auto-detection (recommended):
+            .with_tools([my_custom_tool, "brave-search", another_tool, "time"])
+
+            # Explicit separation (legacy, still supported):
+            .with_tools(mcp_tools=["brave-search"], custom_tools=[my_tool])
+        """
+        detected_mcp_tools: List[str] = []
+        detected_custom_tools: List[Any] = []
+
+        # Process the unified tools list with auto-detection
+        if tools:
+            for tool in tools:
+                if isinstance(tool, str):
+                    # String = MCP server name
+                    detected_mcp_tools.append(tool)
+                elif hasattr(tool, "tool_definition") or (
+                    hasattr(tool, "name") and callable(getattr(tool, "execute", None))
+                ):
+                    # Has tool_definition or is a Tool instance = custom tool
+                    detected_custom_tools.append(tool)
+                else:
+                    # Unknown type - try to provide helpful error
+                    tool_repr = getattr(tool, "__name__", repr(tool))
+                    raise ValueError(
+                        f"Unknown tool type: {tool_repr}. "
+                        f"Tools must be either strings (MCP server names) or "
+                        f"functions decorated with @tool()."
+                    )
+
+        # Also handle explicit mcp_tools/custom_tools params for backward compatibility
+        if mcp_tools:
+            detected_mcp_tools.extend(mcp_tools)
         if custom_tools:
-            self.with_custom_tools(custom_tools)
+            detected_custom_tools.extend(custom_tools)
+
+        # Register the detected tools
+        if detected_mcp_tools:
+            self.with_mcp_tools(detected_mcp_tools)
+        if detected_custom_tools:
+            self.with_custom_tools(detected_custom_tools)
 
         # Add metadata to help track tool sources
         self._config["hybrid_tools_config"] = {
-            "mcp_tools": mcp_tools or [],
-            "custom_tools_count": len(custom_tools) if custom_tools else 0,
+            "mcp_tools": detected_mcp_tools,
+            "custom_tools_count": len(detected_custom_tools),
         }
 
         return self

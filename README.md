@@ -90,23 +90,26 @@ pip install reactive-agents
 
 ```python
 import asyncio
-from reactive_agents import ReactiveAgentBuilder
+from reactive_agents import ReactiveAgentBuilder, ReasoningStrategies
 
 async def main():
     # Create an intelligent research agent
-    async with (
+    agent = await (
         ReactiveAgentBuilder()
         .with_name("Research Assistant")
-        .with_model("ollama:qwen2:7b")  # or "gpt-4o", "claude-3-sonnet"
-        .with_tools(["brave_web_search", "time"])
+        .with_model("ollama:llama3")  # or "openai:gpt-4", "anthropic:claude-3-sonnet"
+        .with_tools(["brave-search", "time"])  # Auto-detects MCP tools vs custom tools
         .with_instructions("Research thoroughly and provide detailed analysis")
+        .with_reasoning_strategy(ReasoningStrategies.REACTIVE)
         .build()
-    ) as agent:
+    )
 
+    async with agent:
         result = await agent.run(
             "What are the latest developments in quantum computing this week?"
         )
-        print(result)
+        print(result.final_answer)
+        print(f"Status: {result.status_message}")
 
 asyncio.run(main())
 ```
@@ -134,33 +137,38 @@ MetricsManager  # Tracks performance and provides insights
 Choose the right strategy for your task:
 
 ```python
+from reactive_agents import ReactiveAgentBuilder, ReasoningStrategies
+
 # Reactive: Fast, direct execution
-agent = ReactiveAgentBuilder().with_reasoning_strategy("reactive").build()
+agent = await ReactiveAgentBuilder().with_reasoning_strategy(ReasoningStrategies.REACTIVE).build()
 
 # Plan-Execute-Reflect: Structured approach
-agent = ReactiveAgentBuilder().with_reasoning_strategy("plan_execute_reflect").build()
+agent = await ReactiveAgentBuilder().with_reasoning_strategy(ReasoningStrategies.PLAN_EXECUTE_REFLECT).build()
 
 # Adaptive: AI selects the best strategy
-agent = ReactiveAgentBuilder().with_reasoning_strategy("adaptive").build()  # Default
+agent = await ReactiveAgentBuilder().with_reasoning_strategy(ReasoningStrategies.ADAPTIVE).build()  # Default
 ```
 
 ### 🛠️ Tool Integration
 
-Three ways to add capabilities to your agents:
+Multiple ways to add capabilities to your agents:
 
 ```python
-# 1. Built-in MCP tools
-.with_tools(["brave_web_search", "filesystem", "sqlite"])
+from reactive_agents import tool
 
-# 2. Custom Python functions
-@tool("Get weather information")
+# 1. Custom Python functions with @tool decorator
+@tool()
 async def get_weather(city: str) -> str:
+    """Get weather information for a city."""
     return f"Weather in {city}: Sunny, 72°F"
 
-.with_custom_tools([get_weather])
+# 2. Mixed tools - auto-detection!
+# Strings = MCP servers, Functions = custom tools
+.with_tools([get_weather, "brave-search", "time", "filesystem"])
 
-# 3. External MCP servers
-.with_mcp_servers(["custom-server"])
+# 3. Or use explicit methods
+.with_mcp_tools(["brave-search", "sqlite"])
+.with_custom_tools([get_weather])
 ```
 
 ---
@@ -170,11 +178,11 @@ async def get_weather(city: str) -> str:
 ### 🔍 Smart Research Agent
 
 ```python
-from reactive_agents import ReactiveAgentBuilder
-from reactive_agents.tools import tool
+from reactive_agents import ReactiveAgentBuilder, tool, ReasoningStrategies
 
-@tool("Analyze data trends")
+@tool()
 async def analyze_trends(data: str) -> str:
+    """Analyze data trends and patterns."""
     # Your analysis logic here
     return f"Trend analysis: {data}"
 
@@ -182,14 +190,9 @@ async def create_research_agent():
     return await (
         ReactiveAgentBuilder()
         .with_name("Research Pro")
-        .with_model("gpt-4o")
-        .with_reasoning_strategy("plan_execute_reflect")
-        .with_tools([
-            "brave_web_search",
-            "time",
-            "filesystem"
-        ])
-        .with_custom_tools([analyze_trends])
+        .with_model("openai:gpt-4")
+        .with_reasoning_strategy(ReasoningStrategies.PLAN_EXECUTE_REFLECT)
+        .with_tools([analyze_trends, "brave-search", "time", "filesystem"])
         .with_instructions("""
             You are a professional research analyst. Always:
             1. Search for the most recent information
@@ -209,9 +212,9 @@ async def create_bi_agent():
     return await (
         ReactiveAgentBuilder()
         .with_name("BI Analyst")
-        .with_model("claude-3-sonnet")
-        .with_tools(["sqlite", "filesystem", "brave_web_search"])
-        .with_memory_enabled(True)
+        .with_model("anthropic:claude-3-sonnet")
+        .with_tools(["sqlite", "filesystem", "brave-search"])
+        .with_vector_memory("bi_agent_memory")  # Enable persistent vector memory
         .with_instructions("""
             You are a business intelligence analyst. Create comprehensive
             reports with data visualizations and actionable insights.
@@ -305,7 +308,7 @@ async def create_monitored_agent():
 
 ### Prerequisites
 
-- **Python 3.8+**
+- **Python 3.10+**
 - **Poetry** (recommended) or pip
 
 ### Basic Installation

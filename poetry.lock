@@ -6110,6 +6110,23 @@ files = [
 dev = ["build", "flake8", "mypy", "pytest", "twine"]
 
 [[package]]
+name = "pysqlite3-binary"
+version = "0.5.4.post2"
+description = "DB-API 2.0 interface for Sqlite 3.x"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "pysqlite3_binary-0.5.4.post2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7f8171c8dd11dfc6fe5321394903782df9610f51d457a3ebe8c972c0bc4606fb"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:3060a56666ede382c9af3e4b086e30c9ffb65133b3fa606c2d1b9fbff512f241"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:b6162cd966fa563fe85b5372c3e61d11dd7903bd0f09cc185cb0a4c9125f4a0f"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:930c7597a0863ef3da721e538756c2768cee14cb9b8d2c037263d061b24f66a5"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:da62981abfbfb4b3d0a9e339932fe44f8d7f3fc62037851f89ea224409ed1767"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp38-cp38-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:6163744e1939f459803c6aed25ea5a9ff653063c1c1ea05fabb33a8b5bcad4f2"},
+    {file = "pysqlite3_binary-0.5.4.post2-cp39-cp39-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:6dfdd3d9c2b29643cc4a0fafb653f0f967d9078cd39fda687fc2d15477408c0d"},
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.2"
 description = "pytest: simple powerful testing with Python"
@@ -8598,4 +8615,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "83441d41509ef13aeea22738283e99950316e3400ba89f19156fe17c999bf91f"
+content-hash = "e0ae288d8052e50da5bdf8de568b3768257b2a66fcdc4ddb12ecb9e4879f14e9"

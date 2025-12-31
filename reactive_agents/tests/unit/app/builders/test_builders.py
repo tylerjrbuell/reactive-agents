@@ -256,12 +256,10 @@ async def test_diagnose_agent_tools():
 async def test_unify_tool_registration():
     """Test the tool manager's _unify_tool_registration method"""
     from reactive_agents.core.tools.tool_manager import ToolManager
-    from reactive_agents.core.context.agent_context import AgentContext
+    from reactive_agents.tests.fixtures import create_mock_context
 
-    # Create a proper agent context
-    context = AgentContext(
-        agent_name="TestAgent", provider_model_name="ollama:llama3.2"
-    )
+    # Create a proper agent context using the test fixture
+    context = create_mock_context(agent_name="TestAgent")
 
     # Set up context tools list
     context_tool1 = MagicMock()

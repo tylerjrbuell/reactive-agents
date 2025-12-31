@@ -97,13 +97,15 @@ class TestLLMFactory:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             pytest.skip("ANTHROPIC_API_KEY not available")
 
-        with patch("anthropic.Anthropic") as mock_anthropic:
+        with patch("anthropic.Anthropic") as mock_anthropic, \
+             patch("reactive_agents.providers.llm.anthropic.AnthropicModelProvider.validate_model",
+                   return_value={"valid": True, "model": "claude-3-5-haiku-20241022"}):
             provider = llm_factory.get_model_provider(
-                "anthropic:claude-3-sonnet-20240229"
+                "anthropic:claude-3-5-haiku-20241022"
             )
             assert provider is not None
             assert provider.id == "anthropic"
-            assert provider.model == "claude-3-sonnet-20240229"
+            assert provider.model == "claude-3-5-haiku-20241022"
 
     def test_create_google_provider(self, llm_factory):
         """Test creating Google provider."""

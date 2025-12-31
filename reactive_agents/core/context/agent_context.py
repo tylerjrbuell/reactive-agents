@@ -19,8 +19,6 @@ from typing import (
     Any,
     Literal,
     Optional,
-    Callable,
-    Awaitable,
     Union,
     Tuple,
 )
@@ -62,6 +60,9 @@ from reactive_agents.core.context.context_manager import ContextManager
 
 # Import AgentConfig
 from reactive_agents.core.config.agent_config import AgentConfig
+
+# Import confirmation types
+from reactive_agents.core.types.confirmation_types import ConfirmationCallbackProtocol
 
 
 class AgentContext(BaseModel):
@@ -143,11 +144,7 @@ class AgentContext(BaseModel):
     tools: List[Any] = Field(default_factory=list)
 
     # Confirmation callback for tool execution
-    confirmation_callback: Optional[
-        Callable[
-            [str, Dict[str, Any]], Awaitable[Union[bool, Tuple[bool, Optional[str]]]]
-        ]
-    ] = None
+    confirmation_callback: Optional[ConfirmationCallbackProtocol] = None
     confirmation_config: Optional[Dict[str, Any]] = None
 
     # Observability (optional)

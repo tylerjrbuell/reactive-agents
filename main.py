@@ -750,7 +750,7 @@ if __name__ == "__main__":
     # Run additional examples
     # asyncio.run(classic_main())
     # asyncio.run(context_managed_main())
-    asyncio.run(test())
+    # asyncio.run(test())
 
     # Test reflect_decide_act strategy
     # asyncio.run(test_reflect_decide_act())
@@ -759,4 +759,4 @@ if __name__ == "__main__":
     # asyncio.run(test_reactive_strategy())
 
     # Test plan_execute_reflect strategy
-    # asyncio.run(test_plan_execute_reflect())
+    asyncio.run(test_plan_execute_reflect())

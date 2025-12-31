@@ -10,12 +10,12 @@ import json
 import os
 import tempfile
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock, mock_open
+from unittest.mock import Mock, patch, mock_open
 from reactive_agents.core.memory.memory_manager import MemoryManager
 from reactive_agents.core.types.memory_types import AgentMemory
 from reactive_agents.core.types.status_types import TaskStatus
 from reactive_agents.core.types.session_types import AgentSession
-from reactive_agents.core.context.agent_context import AgentContext
+from reactive_agents.tests.fixtures import create_mock_context
 
 
 class TestMemoryManager:
@@ -24,25 +24,11 @@ class TestMemoryManager:
     @pytest.fixture
     def mock_context(self):
         """Create a mock agent context that satisfies Pydantic validation."""
-        # Create a simpler mock that the MemoryManager will accept
-        from unittest.mock import Mock, create_autospec
-        from reactive_agents.core.context.agent_context import AgentContext
-        
-        # Create autospec mock that Pydantic will accept
-        context = create_autospec(AgentContext, instance=True)
-        context.agent_name = "TestAgent"
-        context.use_memory_enabled = True
-        context.reflection_manager = None
-        
-        # Mock logger
-        mock_logger = Mock()
-        mock_logger.debug = Mock()
-        mock_logger.info = Mock()
-        mock_logger.warning = Mock()
-        mock_logger.error = Mock()
-        context.agent_logger = mock_logger
-        
-        return context
+        return create_mock_context(
+            agent_name="TestAgent",
+            use_memory_enabled=True,
+            reflection_manager=None
+        )
 
     @pytest.fixture
     def mock_settings(self):

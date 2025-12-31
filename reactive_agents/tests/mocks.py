@@ -17,6 +17,7 @@ class MockModelProvider(BaseModelProvider):
     ):
         self.name = "mock"
         self.model = model
+        self.context = context
 
         # Create proper CompletionResponse objects with JSON content
         mock_response = CompletionResponse(
@@ -34,12 +35,12 @@ class MockModelProvider(BaseModelProvider):
         # Store the mock response for the methods to return
         self._mock_response = mock_response
 
-    async def get_completion(self, **kwargs):
-        """Mock implementation of get_completion."""
+    async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
+        """Mock implementation of _get_provider_completion."""
         return self._mock_response
 
-    async def get_chat_completion(self, **kwargs):
-        """Mock implementation of get_chat_completion."""
+    async def _get_provider_chat_completion(self, **kwargs) -> CompletionResponse:
+        """Mock implementation of _get_provider_chat_completion."""
         return self._mock_response
 
     async def validate_model(self, model_name: str) -> bool:

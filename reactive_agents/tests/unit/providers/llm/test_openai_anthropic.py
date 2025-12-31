@@ -144,15 +144,17 @@ class TestAnthropicProvider:
     @pytest.mark.asyncio
     async def test_anthropic_json_output_mode(self, mock_anthropic_client):
         """Test Anthropic provider JSON output mode."""
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            provider = AnthropicModelProvider(model="claude-3-sonnet-20240229")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
+             patch("reactive_agents.providers.llm.anthropic.AnthropicModelProvider.validate_model",
+                   return_value={"valid": True, "model": "claude-3-5-haiku-20241022"}):
+            provider = AnthropicModelProvider(model="claude-3-5-haiku-20241022")
 
             # Mock the completion response
             mock_completion = Mock()
             mock_completion.content = [Mock()]
             mock_completion.content[0].text = '{"test": "json response"}'
             mock_completion.content[0].type = "text"
-            mock_completion.model = "claude-3-sonnet-20240229"
+            mock_completion.model = "claude-3-5-haiku-20241022"
             mock_completion.stop_reason = "end_turn"
             mock_completion.usage = Mock()
             mock_completion.usage.input_tokens = 10

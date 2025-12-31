@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional, List
 from reactive_agents.app.agents.base import Agent
 from reactive_agents.core.types.agent_types import ReactiveAgentConfig
 from reactive_agents.core.context.agent_context import AgentContext
+from reactive_agents.core.config.agent_config import AgentConfig
 from reactive_agents.core.engine.execution_engine import ExecutionEngine
 from reactive_agents.core.events.event_bus import EventBus
 from reactive_agents.config.validators.config_validator import ConfigValidator
@@ -29,14 +30,40 @@ class ReactiveAgent(Agent):
         config: ReactiveAgentConfig,
         context: Optional[AgentContext] = None,
         event_bus: Optional[EventBus] = None,
-
     ):
         self.config = config
         # Create context if not provided (for builder pattern compatibility)
         if context is None:
-            # Convert ReactAgentConfig to AgentContext by extracting fields
-            context_data = config.model_dump()
-            context = AgentContext(**context_data)
+            # Create AgentConfig from ReactiveAgentConfig fields
+            config_data = config.model_dump(
+                exclude={
+                    "mcp_client",
+                    "mcp_config",
+                    "mcp_server_filter",
+                    "confirmation_callback",
+                    "confirmation_config",
+                    "workflow_context_shared",
+                    "tools",
+                    "kwargs",
+                    "initial_task",
+                }
+            )
+            agent_config = AgentConfig.from_dict(config_data)
+
+            # Create AgentContext with the proper config
+            context = AgentContext(config=agent_config)
+
+            # Transfer runtime-specific fields from ReactiveAgentConfig to AgentContext
+            if config.mcp_client:
+                context.mcp_client = config.mcp_client
+            if config.workflow_context_shared:
+                context.workflow_context_shared = config.workflow_context_shared
+            if config.confirmation_callback:
+                context.confirmation_callback = config.confirmation_callback
+            if config.confirmation_config:
+                context.confirmation_config = config.confirmation_config
+            if config.tools:
+                context.tools = config.tools
 
             # Ensure event_bus is initialized if not present
             if context.event_bus is None:
@@ -49,8 +76,6 @@ class ReactiveAgent(Agent):
             self._event_bus = context.event_bus
         else:
             self._event_bus = event_bus
-
-
 
         # Initialize execution engine
         self.execution_engine = ExecutionEngine(self)

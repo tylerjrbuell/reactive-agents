@@ -52,6 +52,7 @@ anthropic = ">=0.45.2"
 google-generativeai = "^0.8.3"
 instructor = {extras = ["anthropic"], version = "^1.10.0"}
 fastmcp = "^2.14.1"
+pysqlite3-binary = "^0.5.4.post2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -66,6 +67,21 @@ mkdocstrings = {extras = ["python"], version = "^0.27.0"}
 mkdocs-gen-files = "^0.5.0"
 mkdocs-literate-nav = "^0.6.0"
 mkdocs-section-index = "^0.3.0"
+
+[tool.pytest.ini_options]
+testpaths = ["reactive_agents/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "integration: mark test as integration test",
+    "providers: mark test as provider test",
+    "slow: mark test as slow running test",
+    "unit: mark test as unit test",
+]
 
 [build-system]
 requires = ["poetry-core"]

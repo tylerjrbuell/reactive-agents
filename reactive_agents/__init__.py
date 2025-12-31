@@ -34,7 +34,7 @@ from reactive_agents.core.tools.decorators import tool, create_tool_from_functio
 
 # Types and enums
 from reactive_agents.core.types.reasoning_types import ReasoningStrategies
-from reactive_agents.core.types.execution_types import ExecutionResult
+from reactive_agents.core.types.execution_types import ExecutionResult, AgentResult
 from reactive_agents.core.types.agent_types import ReactiveAgentConfig
 from reactive_agents.core.types.confirmation_types import (
     ConfirmationConfig,
@@ -55,6 +55,7 @@ __all__ = [
     # Types and enums
     "ReasoningStrategies",
     "ExecutionResult",
+    "AgentResult",  # Alias for ExecutionResult - return type of agent.run()
     "ReactiveAgentConfig",
     "ConfirmationConfig",
     "ConfirmationCallbackProtocol",

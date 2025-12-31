@@ -98,7 +98,7 @@ class TestGoogleModelProvider:
             )
 
             messages = [{"role": "user", "content": "Hello"}]
-            result = await provider.get_chat_completion(messages)
+            result = await provider.get_chat_completion(messages=messages)
 
             assert isinstance(result, CompletionResponse)
             assert result.message.content == "Test response"
@@ -131,7 +131,7 @@ class TestGoogleModelProvider:
             mock_retry.return_value = mock_response
 
             messages = [{"role": "user", "content": "Return JSON"}]
-            result = await provider.get_chat_completion(messages, format="json")
+            result = await provider.get_chat_completion(messages=messages, format="json")
 
             assert isinstance(result, CompletionResponse)
             # JSON should be cleaned (markdown removed)
@@ -152,7 +152,7 @@ class TestGoogleModelProvider:
             mock_retry.return_value = mock_response
 
             messages = [{"role": "user", "content": "Blocked content"}]
-            result = await provider.get_chat_completion(messages)
+            result = await provider.get_chat_completion(messages=messages)
 
             assert isinstance(result, CompletionResponse)
             assert result.message.content == "[Response blocked by safety filters]"
@@ -175,7 +175,7 @@ class TestGoogleModelProvider:
             mock_retry.return_value = mock_response
 
             messages = [{"role": "user", "content": "Hello"}]
-            result = await provider.get_chat_completion(messages)
+            result = await provider.get_chat_completion(messages=messages)
 
             assert isinstance(result, CompletionResponse)
             assert result.message.content == "[No response generated]"
@@ -270,7 +270,7 @@ class TestGoogleModelProvider:
                 created_at="123456789",
             )
 
-            result = await provider.get_completion("Hello", system="Be helpful")
+            result = await provider.get_completion(prompt="Hello", system="Be helpful")
 
             assert isinstance(result, CompletionResponse)
             assert result.message.content == "Test response"
@@ -300,7 +300,7 @@ async def test_google_provider_integration():
 
     # Test simple completion
     messages = [{"role": "user", "content": "Say 'Hello World' and nothing else."}]
-    result = await provider.get_chat_completion(messages)
+    result = await provider.get_chat_completion(messages=messages)
 
     assert isinstance(result, CompletionResponse)
     assert "Hello World" in result.message.content
@@ -308,7 +308,7 @@ async def test_google_provider_integration():
 
     # Test JSON format
     json_messages = [{"role": "user", "content": 'Return JSON: {"greeting": "Hello"}'}]
-    json_result = await provider.get_chat_completion(json_messages, format="json")
+    json_result = await provider.get_chat_completion(messages=json_messages, format="json")
 
     assert isinstance(json_result, CompletionResponse)
     # Should contain valid JSON

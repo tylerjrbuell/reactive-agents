@@ -70,10 +70,9 @@ class TestOllamaModelProvider:
     def test_initialization_with_custom_host(self, mock_ollama_client):
         """Test OllamaModelProvider initialization with custom host."""
         with patch.dict(os.environ, {"OLLAMA_HOST": "http://custom-host:11434"}):
-            # Need to patch the class variable host before creating instance
-            with patch.object(OllamaModelProvider, "host", "http://custom-host:11434"):
-                provider = OllamaModelProvider(model="llama2")
-                assert provider.host == "http://custom-host:11434"
+            # Host is now passed as an instance parameter
+            provider = OllamaModelProvider(model="llama2", host="http://custom-host:11434")
+            assert provider.host == "http://custom-host:11434"
 
     def test_validate_model_success(self, mock_ollama_client):
         """Test successful model validation."""
@@ -81,7 +80,8 @@ class TestOllamaModelProvider:
 
         # Should not raise an exception since llama2:latest is in the mock models
         result = provider.validate_model()
-        assert result is None  # validate_model doesn't return anything on success
+        assert result["valid"] is True
+        assert result["model"] == "llama2"
 
     def test_validate_model_with_tag(self, mock_ollama_client):
         """Test model validation with explicit tag."""
@@ -89,7 +89,8 @@ class TestOllamaModelProvider:
 
         # Should not raise an exception since llama2:latest is in the mock models
         result = provider.validate_model()
-        assert result is None
+        assert result["valid"] is True
+        assert result["model"] == "llama2:latest"
 
     def test_validate_model_failure(self, mock_ollama_client):
         """Test model validation failure."""
@@ -222,18 +223,19 @@ class TestOllamaModelProvider:
             return_value=mock_model_info
         )
 
-        # Mock the get_tool_calls method
-        mock_tool_call = Mock()
-        mock_tool_call.model_dump.return_value = {
-            "id": "call_123",
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "arguments": '{"location": "San Francisco"}',
-            },
-        }
+        # Mock the _get_manual_tool_calls method (renamed from get_tool_calls)
+        mock_tool_calls = [
+            {
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "San Francisco"}',
+                },
+            }
+        ]
 
-        with patch.object(provider, "get_tool_calls", return_value=[mock_tool_call]):
+        with patch.object(provider, "_get_manual_tool_calls", new=AsyncMock(return_value=mock_tool_calls)):
             tools = [
                 {
                     "type": "function",
@@ -284,12 +286,19 @@ class TestOllamaModelProvider:
         assert result.done is True
 
     @pytest.mark.asyncio
-    async def test_get_tool_calls(self, mock_ollama_client):
-        """Test manual tool call generation."""
+    async def test_get_manual_tool_calls(self, mock_ollama_client):
+        """Test manual tool call generation via base class method."""
         provider = OllamaModelProvider(model="llama2")
 
-        # Create a mock context with reasoning engine
+        # Create a mock context with context_manager and reasoning_engine
         mock_context = Mock()
+        mock_context_manager = Mock()
+        mock_context_manager.get_tool_calling_context.return_value = {
+            "context_summary": "Test context",
+            "tool_summaries": []
+        }
+        mock_context.context_manager = mock_context_manager
+
         mock_reasoning_engine = Mock()
         mock_prompt = Mock()
         mock_completion_result = Mock()
@@ -309,6 +318,7 @@ class TestOllamaModelProvider:
         mock_prompt.get_completion = AsyncMock(return_value=mock_completion_result)
         mock_reasoning_engine.get_prompt.return_value = mock_prompt
         mock_context.reasoning_engine = mock_reasoning_engine
+        mock_context.agent_logger = Mock()
         provider.context = mock_context
 
         tools = [
@@ -321,12 +331,13 @@ class TestOllamaModelProvider:
             }
         ]
 
-        result = await provider.get_tool_calls(
+        # Test the base class _get_manual_tool_calls method
+        result = await provider._get_manual_tool_calls(
             task="Get weather for San Francisco", tools=tools, max_calls=1
         )
 
         assert len(result) == 1
-        assert result[0].function.name == "get_weather"
+        assert result[0]["function"]["name"] == "get_weather"
 
     @pytest.mark.asyncio
     async def test_error_handling(self, mock_ollama_client):

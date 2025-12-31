@@ -8,7 +8,7 @@ caching, validation, integration with SOLID components, and parallel execution.
 import pytest
 import asyncio
 import time
-from unittest.mock import Mock, patch, MagicMock, AsyncMock, create_autospec
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from reactive_agents.core.tools.tool_manager import ToolManager, ParallelToolResult
 from reactive_agents.core.tools.base import Tool
 from reactive_agents.core.tools.abstractions import ToolProtocol, MCPToolWrapper
@@ -18,8 +18,8 @@ from reactive_agents.core.tools.tool_confirmation import ToolConfirmation
 from reactive_agents.core.tools.tool_validator import ToolValidator
 from reactive_agents.core.tools.tool_executor import ToolExecutor
 from reactive_agents.core.tools.default import FinalAnswerTool
-from reactive_agents.core.context.agent_context import AgentContext
 from reactive_agents.core.types.event_types import AgentStateEvent
+from reactive_agents.tests.fixtures import create_mock_context
 
 
 class TestToolManager:
@@ -28,35 +28,17 @@ class TestToolManager:
     @pytest.fixture
     def mock_context(self):
         """Create a mock agent context."""
-        context = create_autospec(AgentContext, instance=True)
-        context.agent_name = "TestAgent"
-        context.enable_caching = True
-        context.cache_ttl = 3600
-        context.confirmation_callback = None
-        context.confirmation_config = None
-        context.tool_use_enabled = True
-        context.collect_metrics_enabled = True
-        context.tools = []
-        context.mcp_client = None
-
-        # Mock loggers
-        context.agent_logger = Mock()
-        context.tool_logger = Mock()
-        context.model_provider = Mock()
-
-        # Mock session
-        context.session = Mock()
-        context.session.successful_tools = set()
-
-        # Mock metrics manager
-        context.metrics_manager = Mock()
-        context.metrics_manager.update_tool_metrics = Mock()
-        context.metrics_manager.get_metrics = Mock(return_value={})
-
-        # Mock event emission
-        context.emit_event = Mock()
-
-        return context
+        return create_mock_context(
+            agent_name="TestAgent",
+            enable_caching=True,
+            cache_ttl=3600,
+            confirmation_callback=None,
+            confirmation_config=None,
+            tool_use_enabled=True,
+            collect_metrics_enabled=True,
+            tools=[],
+            mcp_client=None
+        )
 
     @pytest.fixture
     def mock_tool(self):
@@ -215,6 +197,8 @@ class TestToolManager:
             {"type": "function", "function": {"name": "mcp_tool1"}}
         ]
         mock_mcp_client.server_tools = {"server1": mock_mcp_tools}
+        # get_tools is an async method, so use AsyncMock
+        mock_mcp_client.get_tools = AsyncMock(return_value=None)
         mock_context.mcp_client = mock_mcp_client
 
         with patch.object(tool_manager, "_generate_tool_signatures"), patch(
@@ -683,35 +667,17 @@ class TestParallelToolExecution:
     @pytest.fixture
     def mock_context(self):
         """Create a mock agent context."""
-        context = create_autospec(AgentContext, instance=True)
-        context.agent_name = "TestAgent"
-        context.enable_caching = True
-        context.cache_ttl = 3600
-        context.confirmation_callback = None
-        context.confirmation_config = None
-        context.tool_use_enabled = True
-        context.collect_metrics_enabled = True
-        context.tools = []
-        context.mcp_client = None
-
-        # Mock loggers
-        context.agent_logger = Mock()
-        context.tool_logger = Mock()
-        context.model_provider = Mock()
-
-        # Mock session
-        context.session = Mock()
-        context.session.successful_tools = set()
-
-        # Mock metrics manager
-        context.metrics_manager = Mock()
-        context.metrics_manager.update_tool_metrics = Mock()
-        context.metrics_manager.get_metrics = Mock(return_value={})
-
-        # Mock event emission
-        context.emit_event = Mock()
-
-        return context
+        return create_mock_context(
+            agent_name="TestAgent",
+            enable_caching=True,
+            cache_ttl=3600,
+            confirmation_callback=None,
+            confirmation_config=None,
+            tool_use_enabled=True,
+            collect_metrics_enabled=True,
+            tools=[],
+            mcp_client=None
+        )
 
     @pytest.fixture
     def mock_tools(self):
@@ -893,12 +859,9 @@ class TestParallelToolExecution:
         self, tool_manager_for_parallel, mock_context
     ):
         """Test that one tool failure doesn't affect others."""
-        # Make one tool fail
-        original_use_tool = tool_manager_for_parallel.use_tool
-
         call_count = 0
 
-        async def use_tool_with_failure(tool_call):
+        async def use_tool_with_failure(self_arg, tool_call):
             nonlocal call_count
             call_count += 1
             tool_name = tool_call.get("function", {}).get("name")
@@ -906,15 +869,14 @@ class TestParallelToolExecution:
                 return "Error: Simulated failure"
             return f"Success: {tool_name}"
 
-        tool_manager_for_parallel.use_tool = use_tool_with_failure
-
         tool_calls = [
             {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
             {"id": "call_2", "function": {"name": "tool_1", "arguments": {}}},  # This will fail
             {"id": "call_3", "function": {"name": "tool_2", "arguments": {}}},
         ]
 
-        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+        with patch.object(type(tool_manager_for_parallel), 'use_tool', new=use_tool_with_failure):
+            results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
 
         assert len(results) == 3
         assert call_count == 3  # All tools were attempted
@@ -936,13 +898,11 @@ class TestParallelToolExecution:
         self, tool_manager_for_parallel, mock_context
     ):
         """Test that exceptions in one tool don't crash others."""
-        async def use_tool_with_exception(tool_call):
+        async def use_tool_with_exception(self_arg, tool_call):
             tool_name = tool_call.get("function", {}).get("name")
             if tool_name == "tool_1":
                 raise RuntimeError("Unexpected error")
             return f"Success: {tool_name}"
-
-        tool_manager_for_parallel.use_tool = use_tool_with_exception
 
         tool_calls = [
             {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}},
@@ -950,7 +910,8 @@ class TestParallelToolExecution:
             {"id": "call_3", "function": {"name": "tool_2", "arguments": {}}},
         ]
 
-        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+        with patch.object(type(tool_manager_for_parallel), 'use_tool', new=use_tool_with_exception):
+            results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
 
         assert len(results) == 3
 
@@ -1017,14 +978,13 @@ class TestParallelToolExecution:
     @pytest.mark.asyncio
     async def test_execute_tool_safe_failure(self, tool_manager_for_parallel):
         """Test execute_tool_safe with failed execution."""
-        async def failing_use_tool(tool_call):
+        async def failing_use_tool(self_arg, tool_call):
             return "Error: Tool failed"
-
-        tool_manager_for_parallel.use_tool = failing_use_tool
 
         tool_call = {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}}
 
-        result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
+        with patch.object(type(tool_manager_for_parallel), 'use_tool', new=failing_use_tool):
+            result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
 
         assert isinstance(result, ParallelToolResult)
         assert result.success is False
@@ -1033,18 +993,17 @@ class TestParallelToolExecution:
     @pytest.mark.asyncio
     async def test_execute_tool_safe_exception(self, tool_manager_for_parallel):
         """Test execute_tool_safe handles exceptions gracefully."""
-        async def exception_use_tool(tool_call):
+        async def exception_use_tool(self_arg, tool_call):
             raise ValueError("Something went wrong")
-
-        tool_manager_for_parallel.use_tool = exception_use_tool
 
         tool_call = {"id": "call_1", "function": {"name": "tool_0", "arguments": {}}}
 
-        result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
+        with patch.object(type(tool_manager_for_parallel), 'use_tool', new=exception_use_tool):
+            result = await tool_manager_for_parallel.execute_tool_safe(tool_call)
 
         assert isinstance(result, ParallelToolResult)
         assert result.success is False
-        assert "Something went wrong" in result.error
+        assert result.error is not None and "Something went wrong" in result.error
 
     @pytest.mark.asyncio
     async def test_parallel_execution_respects_guards(
@@ -1078,13 +1037,11 @@ class TestParallelToolExecution:
         """Test that parallel execution actually runs concurrently."""
         execution_times = []
 
-        async def timed_use_tool(tool_call):
+        async def timed_use_tool(self_arg, tool_call):
             start = time.time()
             await asyncio.sleep(0.1)  # Simulate 100ms of work
             execution_times.append(time.time() - start)
-            return f"Result"
-
-        tool_manager_for_parallel.use_tool = timed_use_tool
+            return "Result"
 
         tool_calls = [
             {"function": {"name": "tool_0", "arguments": {}}},
@@ -1093,7 +1050,8 @@ class TestParallelToolExecution:
         ]
 
         start_time = time.time()
-        results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
+        with patch.object(type(tool_manager_for_parallel), 'use_tool', new=timed_use_tool):
+            results = await tool_manager_for_parallel.execute_tools_parallel(tool_calls)
         total_time = time.time() - start_time
 
         assert len(results) == 3

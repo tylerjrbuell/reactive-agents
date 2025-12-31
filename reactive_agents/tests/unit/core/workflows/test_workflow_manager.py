@@ -7,11 +7,11 @@ context updates, and workflow state management.
 
 import pytest
 import json
-from unittest.mock import Mock, patch, create_autospec
+from unittest.mock import Mock, patch
 from datetime import datetime
 from reactive_agents.core.workflows.workflow_manager import WorkflowManager
-from reactive_agents.core.context.agent_context import AgentContext
 from reactive_agents.core.types.status_types import TaskStatus
+from reactive_agents.tests.fixtures import create_mock_context
 
 
 class TestWorkflowManager:
@@ -20,21 +20,10 @@ class TestWorkflowManager:
     @pytest.fixture
     def mock_context(self):
         """Create a mock agent context."""
-        context = create_autospec(AgentContext, instance=True)
-        context.agent_name = "TestAgent"
-
-        # Mock session
-        context.session = Mock()
+        context = create_mock_context(agent_name="TestAgent")
+        # Override session attributes for workflow tests
         context.session.iterations = 1
         context.session.task_status = TaskStatus.INITIALIZED
-
-        # Mock logger
-        context.agent_logger = Mock()
-        context.agent_logger.debug = Mock()
-        context.agent_logger.info = Mock()
-        context.agent_logger.warning = Mock()
-        context.agent_logger.error = Mock()
-
         return context
 
     @pytest.fixture

@@ -17,7 +17,7 @@ from reactive_agents.tests.integration.mcp_fixtures import (
 # Get CI timeout value from environment or use default
 CI_TIMEOUT = int(os.environ.get("PYTEST_TIMEOUT", "5"))
 
-# Determine if we're in CI environment
+# Determine if we're in CI environment or MCP servers aren't available
 IN_CI = (
     os.environ.get("DISABLE_MCP_CLIENT_SYSTEM_EXIT") == "1"
     or os.environ.get("MOCK_MCP_CLIENT") == "1"
@@ -25,13 +25,16 @@ IN_CI = (
     or os.environ.get("NO_DOCKER") == "1"
 )
 
+# Check if MCP integration tests are explicitly enabled
+MCP_TESTS_ENABLED = os.environ.get("MCP_INTEGRATION_TESTS") == "1"
+
 # Skip reason for CI environment
-CI_SKIP_REASON = "Test intentionally skipped in CI environment to prevent Docker pulls"
+CI_SKIP_REASON = "Test requires MCP servers. Set MCP_INTEGRATION_TESTS=1 to run."
 
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(CI_TIMEOUT)
-@pytest.mark.skipif(IN_CI, reason=CI_SKIP_REASON)
+@pytest.mark.skipif(IN_CI or not MCP_TESTS_ENABLED, reason=CI_SKIP_REASON)
 async def test_builder_with_mcp_tools_fixed(
     mock_mcp_initialize, mock_agent_run, model_validation_bypass
 ):
@@ -90,7 +93,7 @@ async def test_builder_with_mcp_tools_fixed(
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(CI_TIMEOUT)
-@pytest.mark.skipif(IN_CI, reason=CI_SKIP_REASON)
+@pytest.mark.skipif(IN_CI or not MCP_TESTS_ENABLED, reason=CI_SKIP_REASON)
 async def test_research_agent_factory_fixed(
     mock_mcp_initialize, mock_agent_run, model_validation_bypass
 ):

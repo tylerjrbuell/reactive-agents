@@ -1,23 +1,12 @@
 """
-Global pytest configuration and fixtures.
+Test fixtures for the reactive_agents test suite.
 
-This file configures pytest behavior for all tests in the project.
+Note: pytest_plugins and pytest_configure are defined in the root conftest.py.
 """
 
 import pytest
 import os
 from unittest.mock import patch
-
-# Configure asyncio for all tests
-pytest_plugins = ["pytest_asyncio"]
-
-
-# Register custom pytest marks to avoid warnings
-def pytest_configure(config):
-    """Register custom marks."""
-    config.addinivalue_line("markers", "integration: mark test as integration test")
-    config.addinivalue_line("markers", "providers: mark test as provider test")
-    config.addinivalue_line("markers", "slow: mark test as slow running test")
 
 
 @pytest.fixture(scope="session", autouse=True)
