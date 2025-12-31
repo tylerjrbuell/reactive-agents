@@ -21,6 +21,7 @@ from typing import (
     TYPE_CHECKING,
 )
 import asyncio
+from enum import Enum
 from typing_extensions import Literal
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -66,6 +67,49 @@ ReactiveAgentBuilderT = TypeVar("ReactiveAgentBuilderT", bound="ReactiveAgentBui
 from reactive_agents.core.types.reasoning_types import ReasoningStrategies
 
 ReasoningStrategyType = ReasoningStrategies
+
+
+class Provider(str, Enum):
+    """Supported LLM providers for the agent framework.
+
+    Use these enum values with `with_model()` for type-safe configuration:
+
+    Example:
+        builder.with_model(Provider.ANTHROPIC, "claude-3-sonnet-20240229")
+        # Or with string format:
+        builder.with_model("anthropic:claude-3-sonnet-20240229")
+    """
+
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+    OLLAMA = "ollama"
+    GROQ = "groq"
+    GOOGLE = "google"
+
+    @classmethod
+    def values(cls) -> List[str]:
+        """Get all supported provider names."""
+        return [p.value for p in cls]
+
+    @classmethod
+    def is_valid(cls, provider: str) -> bool:
+        """Check if a provider name is valid."""
+        return provider.lower() in cls.values()
+
+
+class BuilderValidationError(ValueError):
+    """Exception raised when builder configuration is invalid.
+
+    Provides detailed error messages with suggestions for valid values.
+    """
+
+    def __init__(self, message: str, field: str, valid_options: Optional[List[str]] = None):
+        self.field = field
+        self.valid_options = valid_options
+        full_message = f"Builder validation error for '{field}': {message}"
+        if valid_options:
+            full_message += f"\n  Valid options: {', '.join(valid_options)}"
+        super().__init__(full_message)
 
 
 class ToolConfig(BaseModel):
@@ -272,9 +316,62 @@ class ReactiveAgentBuilder:
         self._config["role"] = role
         return self
 
-    def with_model(self, model_name: str) -> "ReactiveAgentBuilder":
-        """Set the model to use for the agent"""
-        self._config["provider_model_name"] = model_name
+    def with_model(
+        self,
+        model_name_or_provider: Union[str, Provider],
+        model: Optional[str] = None,
+    ) -> "ReactiveAgentBuilder":
+        """Set the model to use for the agent.
+
+        Args:
+            model_name_or_provider: Either:
+                - Full model spec string: "provider:model" (e.g., "anthropic:claude-3-sonnet")
+                - Provider enum: Provider.ANTHROPIC, Provider.OPENAI, etc.
+            model: Model name when using Provider enum (required if using enum)
+
+        Returns:
+            self for method chaining
+
+        Raises:
+            BuilderValidationError: If provider or model format is invalid
+
+        Examples:
+            # String format (existing pattern)
+            builder.with_model("anthropic:claude-3-sonnet")
+
+            # Type-safe enum format
+            builder.with_model(Provider.ANTHROPIC, "claude-3-sonnet")
+        """
+        # Handle Provider enum
+        if isinstance(model_name_or_provider, Provider):
+            if model is None:
+                raise BuilderValidationError(
+                    "Model name is required when using Provider enum",
+                    field="model",
+                )
+            full_model_name = f"{model_name_or_provider.value}:{model}"
+        else:
+            full_model_name = model_name_or_provider
+
+        # Validate format
+        if ":" not in full_model_name:
+            raise BuilderValidationError(
+                f"Invalid model format '{full_model_name}'. Expected 'provider:model' format "
+                f"(e.g., 'anthropic:claude-3-sonnet', 'ollama:llama3:8b')",
+                field="model",
+                valid_options=[f"{p}:<model_name>" for p in Provider.values()],
+            )
+
+        # Extract and validate provider
+        provider = full_model_name.split(":")[0].lower()
+        if not Provider.is_valid(provider):
+            raise BuilderValidationError(
+                f"Unknown provider '{provider}'",
+                field="model",
+                valid_options=Provider.values(),
+            )
+
+        self._config["provider_model_name"] = full_model_name
         return self
 
     def with_model_provider_options(
@@ -309,21 +406,45 @@ class ReactiveAgentBuilder:
     # Advanced reasoning strategy methods
     def with_reasoning_strategy(
         self,
-        strategy: ReasoningStrategies = ReasoningStrategies.ADAPTIVE,
+        strategy: Union[ReasoningStrategies, str] = ReasoningStrategies.ADAPTIVE,
     ) -> "ReactiveAgentBuilder":
         """
         Set the initial reasoning strategy for the agent.
 
-        Available strategies are dynamically discovered from the ReasoningStrategies enum.
-        Default: "adaptive"
+        Args:
+            strategy: Either a ReasoningStrategies enum or a string strategy name.
+                      Default: ReasoningStrategies.ADAPTIVE
 
-        Common strategies:
-        - "reflect_decide_act" - Reflect, decide, then act (most robust)
-        - "plan_execute_reflect" - Plan first, execute, then reflect
-        - "reactive" - Quick reactive responses (fastest)
-        - "adaptive" - Switch strategies based on task complexity
+        Available strategies:
+        - REACTIVE: Quick reactive responses (fastest)
+        - REFLECT_DECIDE_ACT: Reflect, decide, then act (most robust)
+        - PLAN_EXECUTE_REFLECT: Plan first, execute, then reflect
+        - SELF_ASK: Question decomposition approach
+        - GOAL_ACTION_FEEDBACK: GAF pattern
+        - ADAPTIVE: Switch strategies based on task complexity
+
+        Raises:
+            BuilderValidationError: If strategy is invalid
+
+        Examples:
+            # Using enum (recommended)
+            builder.with_reasoning_strategy(ReasoningStrategies.REACTIVE)
+
+            # Using string (still supported)
+            builder.with_reasoning_strategy("reactive")
         """
-        # Type safety is handled by the Literal type, just store the strategy
+        # Convert string to enum if needed
+        if isinstance(strategy, str):
+            strategy_lower = strategy.lower()
+            valid_strategies = [s.value for s in ReasoningStrategies]
+            if strategy_lower not in valid_strategies:
+                raise BuilderValidationError(
+                    f"Unknown reasoning strategy '{strategy}'",
+                    field="reasoning_strategy",
+                    valid_options=valid_strategies,
+                )
+            strategy = ReasoningStrategies(strategy_lower)
+
         self._config["reasoning_strategy"] = strategy
         return self
 

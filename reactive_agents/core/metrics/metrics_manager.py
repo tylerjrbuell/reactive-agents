@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # Import ContextProtocol at runtime so Pydantic can resolve the forward reference
 from reactive_agents.core.context.context_protocol import ContextProtocol
@@ -41,8 +41,7 @@ class MetricsManager(BaseModel):
     tool_latency: float = 0.0
     model_latency: float = 0.0
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property
     def agent_logger(self) -> Logger:

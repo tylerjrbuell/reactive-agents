@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import statistics
 from collections import defaultdict, deque
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from reactive_agents.core.reasoning.state_machine import StrategyState
 
@@ -82,6 +82,9 @@ class ExecutionRecord:
 
 class StrategyMetrics(BaseModel):
     """Aggregated metrics for a strategy."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     strategy_name: str
     total_executions: int = 0
     successful_executions: int = 0
@@ -91,9 +94,6 @@ class StrategyMetrics(BaseModel):
     completion_scores: List[float] = Field(default_factory=list)
     efficiency_scores: List[float] = Field(default_factory=list)
     recent_performance_window: deque = Field(default_factory=lambda: deque(maxlen=20))
-    
-    class Config:
-        arbitrary_types_allowed = True
 
     @property
     def success_rate(self) -> float:

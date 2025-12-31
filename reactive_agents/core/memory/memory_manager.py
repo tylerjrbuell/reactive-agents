@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 # Import shared types from the new location
 from reactive_agents.core.types.memory_types import AgentMemory
@@ -21,15 +21,14 @@ if TYPE_CHECKING:
 class MemoryManager(BaseModel):
     """Manages agent's persistent memory (session history, preferences, reflections)."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     context: "ContextProtocol" = Field(exclude=True)  # Reference back to the context
 
     # State
     agent_memory: Optional[AgentMemory] = None
     memory_file_path: Optional[str] = None
     memory_enabled: bool = True  # Controlled by context
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def __init__(self, **data):
         super().__init__(**data)

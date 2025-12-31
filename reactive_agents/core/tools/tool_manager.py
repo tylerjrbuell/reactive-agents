@@ -1,17 +1,13 @@
-from typing import Any, Dict, List, Optional, Union, Tuple, TYPE_CHECKING, NamedTuple
+from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
 import time
-import json
 import asyncio
-import inspect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from dataclasses import dataclass
-from reactive_agents.core.types.confirmation_types import ConfirmationCallbackProtocol
 from reactive_agents.core.types.event_types import AgentStateEvent
 from reactive_agents.core.tools.base import Tool
 from reactive_agents.core.tools.abstractions import (
     MCPToolWrapper,
     ToolProtocol,
-    ToolResult,
 )
 from reactive_agents.utils.logging import Logger
 from reactive_agents.providers.llm.base import BaseModelProvider
@@ -70,8 +66,7 @@ class ToolManager(BaseModel):
     validator: Optional[ToolValidator] = Field(default=None, exclude=True)
     executor: Optional[ToolExecutor] = Field(default=None, exclude=True)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, **data):
         # Initialize cache first since it's needed in __init__
@@ -310,12 +305,20 @@ class ToolManager(BaseModel):
                     isinstance(result, str) and result.startswith("Error")
                 )
 
+                # Convert error to string if it's a list
+                error_str: Optional[str] = None
+                if not is_success:
+                    if isinstance(result, list):
+                        error_str = "; ".join(str(r) for r in result)
+                    elif isinstance(result, str):
+                        error_str = result
+
                 return ParallelToolResult(
                     tool_name=tool_name,
                     tool_call_id=tool_call_id,
                     result=result,
                     success=is_success,
-                    error=result if not is_success else None,
+                    error=error_str,
                     execution_time=execution_time,
                 )
 
@@ -393,12 +396,20 @@ class ToolManager(BaseModel):
                 isinstance(result, str) and result.startswith("Error")
             )
 
+            # Convert error to string if it's a list
+            error_str: Optional[str] = None
+            if not is_success:
+                if isinstance(result, list):
+                    error_str = "; ".join(str(r) for r in result)
+                elif isinstance(result, str):
+                    error_str = result
+
             return ParallelToolResult(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 result=result,
                 success=is_success,
-                error=result if not is_success else None,
+                error=error_str,
                 execution_time=execution_time,
             )
 
@@ -482,11 +493,12 @@ class ToolManager(BaseModel):
                     tool_name, params, cached_result, summary, cached=True
                 )
                 # Handle final answer from cache
-                if tool_name == "final_answer" and self.context:
+                if tool_name == "final_answer" and self.context and self.context.session:
                     self.context.session.final_answer = str(cached_result)
                     if self.tool_logger:
+                        final_answer_preview = self.context.session.final_answer[:100] if self.context.session.final_answer else 'None'
                         self.tool_logger.info(
-                            f"🔧 ToolManager: final_answer from cache, set session.final_answer = {self.context.session.final_answer[:100] if self.context.session.final_answer else 'None'}..."
+                            f"🔧 ToolManager: final_answer from cache, set session.final_answer = {final_answer_preview}..."
                         )
                 # Emit events for cached result
                 self._emit_tool_completion_events(tool_name, params, cached_result, 0.0)
@@ -644,7 +656,7 @@ class ToolManager(BaseModel):
                 {"execution_time": execution_time} if execution_time is not None else {}
             ),
         }
-        if not error and not cancelled and self.context:
+        if not error and not cancelled and self.context and self.context.session:
             self.context.session.successful_tools.add(tool_name)
 
         self.tool_history.append(entry)

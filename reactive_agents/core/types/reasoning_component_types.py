@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from reactive_agents.core.types.status_types import StepStatus
 
 if TYPE_CHECKING:
@@ -37,6 +37,8 @@ class ComponentMetadata(BaseModel):
 class StepResult(BaseModel):
     """Result of a single step in a strategy."""
 
+    model_config = ConfigDict(extra="forbid")
+
     success: bool
     step_name: str
     output: Optional[str] = None
@@ -44,9 +46,6 @@ class StepResult(BaseModel):
     next_step: Optional[str] = None
     should_continue: bool = True
     confidence: float = 0.5
-
-    class Config:
-        extra = "forbid"
 
     def is_successful(self) -> bool:
         """Returns True if the step was successful."""

@@ -68,6 +68,11 @@ class MockContextProtocol:
         self.metrics_manager.update_tool_metrics = Mock()
         self.metrics_manager.get_metrics = Mock(return_value={})
 
+        # Additional manager components (optional in ContextProtocol)
+        self.tool_manager = kwargs.get("tool_manager", None)
+        self.memory_manager = kwargs.get("memory_manager", None)
+        self.context_manager = kwargs.get("context_manager", None)
+
         self.reflection_manager = kwargs.get("reflection_manager", None)
 
         # Tool-related attributes

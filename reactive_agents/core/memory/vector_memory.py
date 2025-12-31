@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, TYPE_CHECKING, Union
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 try:
     import chromadb
@@ -114,6 +114,8 @@ class VectorMemoryManager(BaseModel):
     storage of large memory collections.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     context: Any = Field(exclude=True)  # Reference back to the main context
     config: VectorMemoryConfig
 
@@ -124,9 +126,6 @@ class VectorMemoryManager(BaseModel):
     memory_enabled: bool = True
     _client: Optional[Any] = None  # ChromaDB client
     _ready: bool = False  # Flag to indicate if vector memory is ready
-
-    class Config:
-        arbitrary_types_allowed = True
 
     def __init__(self, **data):
         # Set default config if not provided

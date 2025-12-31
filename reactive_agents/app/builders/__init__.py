@@ -9,6 +9,8 @@ from .agent import (
     quick_create_agent,
     ConfirmationConfig,
     ToolConfig,
+    Provider,
+    BuilderValidationError,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "quick_create_agent",
     "ConfirmationConfig",
     "ToolConfig",
+    "Provider",
+    "BuilderValidationError",
 ]
