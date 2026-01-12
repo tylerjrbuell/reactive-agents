@@ -79,11 +79,29 @@ class TaskGoalEvaluator:
             format="json",
         )
         result = self._parse_response(response)
+
+        # Normalize missing_requirements - LLMs sometimes return objects instead of strings
+        raw_missing = result.get("missing_requirements", [])
+        missing_requirements: list[str] = []
+        if isinstance(raw_missing, list):
+            for item in raw_missing:
+                if isinstance(item, str):
+                    missing_requirements.append(item)
+                elif isinstance(item, dict):
+                    # Extract string from dict (e.g., {"requirement": "..."})
+                    missing_requirements.append(
+                        item.get("requirement", "")
+                        or item.get("description", "")
+                        or str(item)
+                    )
+                else:
+                    missing_requirements.append(str(item))
+
         return TaskGoalEvaluationResult(
             completion=result.get("completion", False),
             completion_score=result.get("completion_score", 0.0),
             reasoning=result.get("reasoning", ""),
-            missing_requirements=result.get("missing_requirements", []),
+            missing_requirements=missing_requirements,
         )
 
     def _build_prompt(self) -> str:

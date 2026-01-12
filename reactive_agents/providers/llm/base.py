@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, ABCMeta, abstractmethod
-from typing import List, Optional, Type, Dict, Any, Union, TYPE_CHECKING
+from typing import List, Optional, Type, Dict, Any, Union, TYPE_CHECKING, AsyncIterator
 import traceback
 import time
 
@@ -11,6 +11,7 @@ from reactive_agents.core.types.provider_types import (
     ModelInfo,
     ProviderStatus,
     ProviderHealth,
+    StreamChunk,
 )
 
 # Import for structured outputs
@@ -799,6 +800,87 @@ class BaseModelProvider(ABC, metaclass=AutoRegisterModelMeta):
         The format parameter will only contain string values ("json" or "") at this level.
         """
         pass
+
+    async def stream_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion tokens from the model.
+
+        Args:
+            messages: List of message dictionaries with 'role' and 'content' keys
+            tools: Optional list of tool/function definitions
+            options: Dict of model-specific parameters (temperature, max_tokens, etc.)
+            **kwargs: Additional provider-specific arguments
+
+        Yields:
+            StreamChunk objects containing content and metadata
+
+        Example:
+            ```python
+            async for chunk in provider.stream_chat_completion(messages):
+                print(chunk.content, end="", flush=True)
+                if chunk.is_final:
+                    print(f"\\nTokens used: {chunk.total_tokens}")
+            ```
+        """
+        # Default implementation calls _stream_provider_chat_completion
+        async for chunk in self._stream_provider_chat_completion(
+            messages=messages,
+            tools=tools,
+            options=options,
+            **kwargs,
+        ):
+            yield chunk
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Provider-specific streaming implementation.
+
+        Override this method in provider subclasses to implement streaming.
+        Default implementation falls back to non-streaming and yields a single chunk.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects
+        """
+        # Default fallback: call non-streaming and yield single chunk
+        self._warn_parameter(
+            f"Streaming not implemented for {self.name} provider, falling back to non-streaming",
+            level="warning",
+        )
+        response = await self._get_provider_chat_completion(
+            messages=messages,
+            tools=tools,
+            options=options,
+            **kwargs,
+        )
+        yield StreamChunk(
+            content=response.message.content,
+            role=response.message.role,
+            finish_reason=response.done_reason,
+            tool_calls=response.message.tool_calls,
+            is_final=True,
+            prompt_tokens=response.prompt_tokens,
+            completion_tokens=response.completion_tokens,
+            total_tokens=response.total_tokens,
+            model=response.model,
+        )
 
     async def get_completion(self, **kwargs) -> Union[CompletionResponse, BaseModel]:
         """

@@ -1,7 +1,7 @@
 import os
 import time
 import re
-from typing import Type, Optional, Dict, Any, List, cast, Union
+from typing import Type, Optional, Dict, Any, List, cast, Union, AsyncIterator
 from groq import BadRequestError, Groq, InternalServerError, Stream
 from groq.types.chat import ChatCompletion, ChatCompletionChunk
 from groq.types.chat.chat_completion_message_param import ChatCompletionMessageParam
@@ -9,7 +9,7 @@ from pydantic import BaseModel
 import instructor
 import json
 
-from .base import BaseModelProvider, CompletionMessage, CompletionResponse
+from .base import BaseModelProvider, CompletionMessage, CompletionResponse, StreamChunk
 
 
 class GroqModelProvider(BaseModelProvider):
@@ -893,6 +893,134 @@ class GroqModelProvider(BaseModelProvider):
         except Exception as e:
             self._handle_error(e, "chat_completion")
             raise Exception(f"Groq Chat Completion Error: {e}")
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion tokens from Groq.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects containing content and metadata
+        """
+        try:
+            # Clean messages for Groq
+            cleaned_messages = [self._clean_message(m) for m in messages]
+
+            # Adapt context for Groq's requirements
+            if tools:
+                cleaned_messages = self._adapt_context_for_provider(cleaned_messages, tools)
+
+            # Convert OpenAI-style parameters to Groq-native format
+            native_options = self.get_native_params(options or {})
+
+            chunk_index = 0
+            accumulated_content = ""
+            accumulated_tool_calls: list[dict] = []
+            current_tool_calls: dict[int, dict] = {}
+
+            # Stream from Groq
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=cast(List[ChatCompletionMessageParam], cleaned_messages),
+                tools=tools if tools else None,
+                stream=True,
+                tool_choice="auto" if tools else "none",
+                **native_options,
+            )
+
+            for chunk in stream:
+                if not isinstance(chunk, ChatCompletionChunk):
+                    continue
+
+                if not chunk.choices:
+                    continue
+
+                choice = chunk.choices[0]
+                delta = choice.delta
+
+                # Get content if present
+                content = delta.content or ""
+                accumulated_content += content
+
+                # Handle tool calls
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in current_tool_calls:
+                            current_tool_calls[idx] = {
+                                "id": tc.id or f"call_{idx}",
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name if tc.function else "",
+                                    "arguments": "",
+                                },
+                            }
+                        else:
+                            # Accumulate function arguments
+                            if tc.function and tc.function.arguments:
+                                current_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+                            # Update name if provided
+                            if tc.function and tc.function.name:
+                                current_tool_calls[idx]["function"]["name"] = tc.function.name
+
+                # Check if this is the final chunk
+                is_final = choice.finish_reason is not None
+
+                # On final chunk, process tool calls
+                if is_final and current_tool_calls:
+                    for idx in sorted(current_tool_calls.keys()):
+                        tc = current_tool_calls[idx]
+                        # Parse arguments JSON
+                        try:
+                            args_str = tc["function"]["arguments"]
+                            if args_str:
+                                tc["function"]["arguments"] = json.loads(args_str)
+                        except json.JSONDecodeError:
+                            tc["function"]["arguments"] = {}
+                        accumulated_tool_calls.append(tc)
+
+                # Build stream chunk
+                stream_chunk = StreamChunk(
+                    content=content,
+                    role="assistant",
+                    finish_reason=choice.finish_reason if is_final else None,
+                    tool_calls=accumulated_tool_calls if is_final and accumulated_tool_calls else None,
+                    is_final=is_final,
+                    chunk_index=chunk_index,
+                    model=chunk.model or self.model,
+                )
+
+                # Add token usage on final chunk if available
+                if is_final and hasattr(chunk, "x_groq") and chunk.x_groq:
+                    usage = getattr(chunk.x_groq, "usage", None)
+                    if usage:
+                        stream_chunk.prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                        stream_chunk.completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                        stream_chunk.total_tokens = stream_chunk.prompt_tokens + stream_chunk.completion_tokens
+
+                yield stream_chunk
+                chunk_index += 1
+
+        except InternalServerError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Groq Internal Server Error: {e.message}")
+        except BadRequestError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Groq Bad Request Error: {e.message}")
+        except Exception as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Groq Stream Chat Completion Error: {e}")
 
     async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         try:

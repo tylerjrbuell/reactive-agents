@@ -7,7 +7,15 @@ type safety.
 """
 
 from __future__ import annotations
-from typing import Protocol, runtime_checkable, Any, Optional, List, TYPE_CHECKING
+from typing import (
+    Protocol,
+    runtime_checkable,
+    Any,
+    Optional,
+    List,
+    Union,
+    TYPE_CHECKING,
+)
 
 if TYPE_CHECKING:
     from reactive_agents.core.config.agent_config import AgentConfig
@@ -20,6 +28,7 @@ if TYPE_CHECKING:
     from reactive_agents.core.metrics.metrics_manager import MetricsManager
     from reactive_agents.core.tools.tool_manager import ToolManager
     from reactive_agents.core.memory.memory_manager import MemoryManager
+    from reactive_agents.core.memory.vector_memory import VectorMemoryManager
     from reactive_agents.core.context.context_manager import ContextManager
 
 
@@ -34,6 +43,9 @@ class ContextProtocol(Protocol):
     This protocol includes both required and optional attributes. Required attributes
     are available during initial component creation, while optional attributes become
     available after full context initialization.
+
+    Note: Loggers are Optional because AgentContext may not have them initialized
+    until after components are injected. Components should check before using.
     """
 
     # =========================================================================
@@ -42,16 +54,16 @@ class ContextProtocol(Protocol):
     config: "AgentConfig"
 
     # =========================================================================
-    # Required: Core Loggers
+    # Core Loggers (Optional - may not be initialized until after injection)
     # =========================================================================
-    agent_logger: "Logger"
-    tool_logger: "Logger"
-    result_logger: "Logger"
+    agent_logger: Optional["Logger"]
+    tool_logger: Optional["Logger"]
+    result_logger: Optional["Logger"]
 
     # =========================================================================
     # Required: Core Components
     # =========================================================================
-    model_provider: "BaseModelProvider"
+    model_provider: Optional["BaseModelProvider"]
     event_bus: Optional["EventBus"]
     mcp_client: Optional["MCPClient"]
 
@@ -60,14 +72,14 @@ class ContextProtocol(Protocol):
     # =========================================================================
     metrics_manager: Optional["MetricsManager"]
     tool_manager: Optional["ToolManager"]
-    memory_manager: Optional["MemoryManager"]
+    memory_manager: Optional[Union["MemoryManager", "VectorMemoryManager"]]
     context_manager: Optional["ContextManager"]
 
     # =========================================================================
     # Optional: Runtime State (available after full initialization)
     # =========================================================================
     session: Optional["AgentSession"]
-    tools: Optional[List["Tool"]]
+    tools: Optional[List[Any]]
 
     # =========================================================================
     # Configuration Properties (delegated to config)

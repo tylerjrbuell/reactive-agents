@@ -2,14 +2,14 @@ import json
 import os
 import time
 import asyncio
-from typing import List, Dict, Any, Optional, Union, Type
+from typing import List, Dict, Any, Optional, Union, Type, AsyncIterator
 import google.generativeai as genai  # type: ignore
 from google.generativeai.types import HarmCategory, HarmBlockThreshold  # type: ignore
 from google.api_core import exceptions as google_exceptions
 from pydantic import BaseModel
 import instructor
 
-from .base import BaseModelProvider, CompletionMessage, CompletionResponse
+from .base import BaseModelProvider, CompletionMessage, CompletionResponse, StreamChunk
 
 
 class GoogleModelProvider(BaseModelProvider):
@@ -827,6 +827,225 @@ class GoogleModelProvider(BaseModelProvider):
         except Exception as e:
             self._handle_error(e, "chat_completion")
             raise Exception(f"Google Chat Completion Error: {str(e)}")
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion tokens from Google.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects containing content and metadata
+        """
+        try:
+            # Prepare messages
+            prepared_messages = self._prepare_messages(messages)
+
+            # Merge options
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Convert OpenAI-style parameters to Google-native format
+            native_options = self.get_native_params(merged_options)
+
+            # Create generation config from native parameters
+            generation_config_params = {}
+            for param in [
+                "temperature",
+                "max_output_tokens",
+                "top_p",
+                "top_k",
+                "frequency_penalty",
+                "presence_penalty",
+                "stop_sequences",
+                "seed",
+                "candidate_count",
+            ]:
+                if param in native_options:
+                    generation_config_params[param] = native_options[param]
+
+            generation_config = genai.types.GenerationConfig(**generation_config_params)  # type: ignore
+
+            # Handle tools/function calling
+            available_functions = None
+            if tools:
+                available_functions = []
+                for tool in tools:
+                    if tool.get("type") == "function":
+                        func_def = tool.get("function", {})
+                        parameters = func_def.get("parameters", {})
+                        cleaned_parameters = (
+                            self._clean_schema_for_google(parameters)
+                            if isinstance(parameters, dict)
+                            else {}
+                        )
+                        google_func = genai.types.FunctionDeclaration(  # type: ignore
+                            name=func_def.get("name", ""),
+                            description=func_def.get("description", ""),
+                            parameters=cleaned_parameters,
+                        )
+                        available_functions.append(google_func)
+
+                if available_functions:
+                    available_functions = genai.types.Tool(  # type: ignore
+                        function_declarations=available_functions
+                    )
+
+            chunk_index = 0
+            accumulated_content = ""
+            accumulated_tool_calls: list[dict] = []
+            is_final = False
+
+            # Stream from Google
+            if len(prepared_messages) > 1:
+                chat = self.generative_model.start_chat(
+                    history=prepared_messages[:-1] if len(prepared_messages) > 1 else []  # type: ignore
+                )
+                response_stream = chat.send_message(
+                    prepared_messages[-1]["parts"][0],  # type: ignore
+                    generation_config=generation_config,
+                    safety_settings=self.default_safety_settings,
+                    tools=[available_functions] if available_functions else None,
+                    stream=True,
+                )
+            else:
+                content = prepared_messages[0]["parts"][0] if prepared_messages else ""  # type: ignore
+                response_stream = self.generative_model.generate_content(
+                    content,
+                    generation_config=generation_config,
+                    safety_settings=self.default_safety_settings,
+                    tools=[available_functions] if available_functions else None,
+                    stream=True,
+                )
+
+            # Process streamed chunks
+            for chunk in response_stream:
+                content = ""
+
+                # Extract text from chunk
+                if hasattr(chunk, "text") and chunk.text:
+                    content = chunk.text
+                    accumulated_content += content
+                elif (
+                    hasattr(chunk, "candidates")
+                    and chunk.candidates
+                    and len(chunk.candidates) > 0
+                ):
+                    candidate = chunk.candidates[0]
+                    if (
+                        hasattr(candidate, "content")
+                        and candidate.content
+                        and hasattr(candidate.content, "parts")
+                    ):
+                        for part in candidate.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                content += part.text
+                                accumulated_content += part.text
+
+                            # Extract function calls
+                            if hasattr(part, "function_call") and part.function_call:
+                                func_call = part.function_call
+                                args_dict = {}
+                                if hasattr(func_call, "args") and func_call.args is not None:
+                                    try:
+                                        if hasattr(func_call.args, "dict"):
+                                            args_dict = func_call.args.dict()
+                                        elif isinstance(func_call.args, dict):
+                                            args_dict = func_call.args
+                                        else:
+                                            args_dict = dict(func_call.args) if func_call.args else {}
+                                    except (TypeError, ValueError):
+                                        args_dict = {}
+
+                                accumulated_tool_calls.append({
+                                    "id": f"call_{int(time.time())}_{len(accumulated_tool_calls)}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": func_call.name,
+                                        "arguments": args_dict,
+                                    },
+                                })
+
+                # Check if this is the final chunk
+                is_final = False
+                finish_reason = None
+                prompt_tokens = 0
+                completion_tokens = 0
+
+                if (
+                    hasattr(chunk, "candidates")
+                    and chunk.candidates
+                    and len(chunk.candidates) > 0
+                ):
+                    candidate = chunk.candidates[0]
+                    if hasattr(candidate, "finish_reason") and candidate.finish_reason:
+                        is_final = True
+                        if candidate.finish_reason == 1:  # STOP
+                            finish_reason = "stop"
+                        elif candidate.finish_reason == 2:  # MAX_TOKENS
+                            finish_reason = "length"
+                        elif candidate.finish_reason == 3:  # SAFETY
+                            finish_reason = "content_filter"
+                        else:
+                            finish_reason = "stop"
+
+                # Get token usage on final chunk if available
+                if is_final and hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    if hasattr(chunk.usage_metadata, "prompt_token_count"):
+                        prompt_tokens = chunk.usage_metadata.prompt_token_count or 0
+                    if hasattr(chunk.usage_metadata, "candidates_token_count"):
+                        completion_tokens = chunk.usage_metadata.candidates_token_count or 0
+
+                # Build stream chunk
+                stream_chunk = StreamChunk(
+                    content=content,
+                    role="assistant",
+                    finish_reason=finish_reason,
+                    tool_calls=accumulated_tool_calls if is_final and accumulated_tool_calls else None,
+                    is_final=is_final,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens,
+                    chunk_index=chunk_index,
+                    model=self.model,
+                )
+
+                yield stream_chunk
+                chunk_index += 1
+
+            # If we didn't get a final chunk, yield one
+            if chunk_index == 0 or not is_final:
+                yield StreamChunk(
+                    content="",
+                    role="assistant",
+                    finish_reason="stop",
+                    tool_calls=accumulated_tool_calls if accumulated_tool_calls else None,
+                    is_final=True,
+                    chunk_index=chunk_index,
+                    model=self.model,
+                )
+
+        except google_exceptions.ResourceExhausted as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Google API Quota Exceeded: {str(e)}")
+        except google_exceptions.InvalidArgument as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Google API Invalid Argument: {str(e)}")
+        except google_exceptions.PermissionDenied as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Google API Permission Denied: {str(e)}")
+        except Exception as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Google Stream Chat Completion Error: {str(e)}")
 
     async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         """

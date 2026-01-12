@@ -592,7 +592,23 @@ class FinalAnswerPrompt(BasePrompt):
         if context.tool_usage_history:
             prompt += f"\n\nTools Used: {', '.join(context.tool_usage_history)}"
 
-        prompt += """\n\nGuidelines:\n- Provide a comprehensive final answer that directly addresses the original task\n- Summarize what was accomplished and how\n- Include key findings and insights discovered\n- Be honest about confidence level and any limitations\n- Use past experiences to inform the quality and completeness of the answer\n- Ensure the answer is actionable and useful to the user\n- Consider the agent's role and instructions in formulating the response"""
+        prompt += """\n\n# Output Requirements
+Your response MUST be a JSON object with these fields:
+1. "final_answer": Comprehensive answer addressing the task
+2. "summary": Brief summary of what was accomplished
+3. "key_findings": Array of key insights/findings (can be empty if none)
+4. "confidence": Number 0.0-1.0 indicating confidence in the answer
+5. "methodology": How you approached the task
+6. "limitations": Array of limitations/caveats (can be empty if none)
+
+# Guidelines
+- Provide a comprehensive final answer that directly addresses the original task
+- Summarize what was accomplished and how
+- Include key findings and insights discovered
+- Be honest about confidence level and any limitations
+- Use past experiences to inform the quality and completeness of the answer
+- Ensure the answer is actionable and useful to the user
+- Consider the agent's role and instructions in formulating the response"""
 
         return prompt
 

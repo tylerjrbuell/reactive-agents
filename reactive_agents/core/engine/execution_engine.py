@@ -59,9 +59,7 @@ class ExecutionEngine:
         self._stop_requested = False
 
         if self.agent_logger:
-            self.agent_logger.info(
-                "🚀 ExecutionEngine | Initialized and ready"
-            )
+            self.agent_logger.info("🚀 ExecutionEngine | Initialized and ready")
 
     def _initialize_strategy_system(self):
         """Initialize strategy management components."""
@@ -242,8 +240,10 @@ class ExecutionEngine:
             # Check if we should switch based on performance
             current_strategy = self.strategy_manager.get_current_strategy_name()
             if current_strategy and self.context.metrics_manager:
-                recommended_switch = self.context.metrics_manager.should_switch_strategy(
-                    current_strategy
+                recommended_switch = (
+                    self.context.metrics_manager.should_switch_strategy(
+                        current_strategy
+                    )
                 )
                 if recommended_switch:
                     if self.agent_logger:
@@ -337,7 +337,9 @@ class ExecutionEngine:
             # Check for cancellation
             if cancellation_event and cancellation_event.is_set():
                 if self.agent_logger:
-                    self.agent_logger.info("🛑 ExecutionEngine | Task cancelled by external signal")
+                    self.agent_logger.info(
+                        "🛑 ExecutionEngine | Task cancelled by external signal"
+                    )
                 break
 
             # Check control signals
@@ -350,7 +352,9 @@ class ExecutionEngine:
                     StrategyState.PAUSED, StateTransitionTrigger.PAUSE_REQUESTED
                 )
                 if self.agent_logger:
-                    self.agent_logger.info("⏸️  ExecutionEngine | Paused, waiting for resume signal")
+                    self.agent_logger.info(
+                        "⏸️  ExecutionEngine | Paused, waiting for resume signal"
+                    )
                 await self._pause_event.wait()
                 await self.state_machine.transition_to(
                     StrategyState.EXECUTING, StateTransitionTrigger.RESUME_REQUESTED
@@ -461,7 +465,9 @@ class ExecutionEngine:
                 if self.context.session.final_answer:
                     self.context.session.task_status = TaskStatus.COMPLETE
                     if self.agent_logger:
-                        self.agent_logger.info("✅ ExecutionEngine | Final answer provided")
+                        self.agent_logger.info(
+                            "✅ ExecutionEngine | Final answer provided"
+                        )
                     break
 
                 # Emit iteration complete
@@ -625,7 +631,6 @@ class ExecutionEngine:
             StrategyState.FAILED, StateTransitionTrigger.TERMINATION_REQUESTED
         )
 
-
     def _should_continue(self) -> bool:
         """Check if execution should continue."""
         # Check for session failure or completion
@@ -712,9 +717,11 @@ class ExecutionEngine:
 
         return result
 
-    def _update_session_scores(self, session, execution_details: Dict[str, Any]) -> None:
+    def _update_session_scores(
+        self, session, execution_details: Dict[str, Any]
+    ) -> None:
         """Update session scoring fields based on execution results."""
-        
+
         # Calculate completion score
         if session.final_answer and session.task_status == TaskStatus.COMPLETE:
             session.completion_score = 1.0
@@ -728,7 +735,9 @@ class ExecutionEngine:
         if total_iterations > 0:
             # Higher score for successful tool usage, lower for errors
             error_count = len(session.errors)
-            tool_efficiency = max(0.0, 1.0 - (error_count / max(1, total_iterations * 2)))
+            tool_efficiency = max(
+                0.0, 1.0 - (error_count / max(1, total_iterations * 2))
+            )
             session.tool_usage_score = tool_efficiency
         else:
             session.tool_usage_score = 0.0

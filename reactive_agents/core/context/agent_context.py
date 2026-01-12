@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from reactive_agents.app.agents.reactive_agent import ReactiveAgent
     from reactive_agents.app.agents.base import Agent
     from reactive_agents.core.factory.component_set import ComponentSet
+    from reactive_agents.core.context.context_protocol import ContextProtocol
 
 from reactive_agents.config.mcp_config import MCPConfig
 from reactive_agents.utils.logging import Logger
@@ -94,23 +95,25 @@ class AgentContext(BaseModel):
     # =========================================================================
     # Session State (mutable runtime)
     # =========================================================================
-    session: AgentSession = Field(default_factory=lambda: AgentSession(
-        initial_task="",
-        current_task="",
-        start_time=time.time(),
-        task_status=TaskStatus.INITIALIZED,
-        reasoning_log=[],
-        task_progress=[],
-        task_nudges=[],
-        successful_tools=set(),
-        metrics={},
-        completion_score=0.0,
-        tool_usage_score=0.0,
-        progress_score=0.0,
-        answer_quality_score=0.0,
-        llm_evaluation_score=0.0,
-        instruction_adherence_score=0.0,
-    ))
+    session: AgentSession = Field(
+        default_factory=lambda: AgentSession(
+            initial_task="",
+            current_task="",
+            start_time=time.time(),
+            task_status=TaskStatus.INITIALIZED,
+            reasoning_log=[],
+            task_progress=[],
+            task_nudges=[],
+            successful_tools=set(),
+            metrics={},
+            completion_score=0.0,
+            tool_usage_score=0.0,
+            progress_score=0.0,
+            answer_quality_score=0.0,
+            llm_evaluation_score=0.0,
+            instruction_adherence_score=0.0,
+        )
+    )
 
     # =========================================================================
     # Component References (injected, not created here)
@@ -189,6 +192,28 @@ class AgentContext(BaseModel):
         self.workflow_manager = components.workflow_manager
         self.context_manager = components.context_manager
         self.task_classifier = components.task_classifier
+
+        # CRITICAL FIX: Update component context references to point to the real AgentContext
+        # Components were initialized with ComponentContext during factory creation,
+        # but need to use the actual AgentContext during execution.
+        #
+        # Type system note: We use cast() here because components were initialized with
+        # ComponentContext (which has optional fields like session=None), but at this point
+        # AgentContext guarantees all fields are properly initialized. The type checker
+        # cannot express this guarantee due to Protocol invariance with mutable attributes,
+        # but the runtime behavior is guaranteed to be correct.
+        from typing import cast
+
+        context: "ContextProtocol" = cast("ContextProtocol", self)
+
+        if self.tool_manager:
+            self.tool_manager.context = context
+        if self.memory_manager:
+            self.memory_manager.context = context
+        if self.metrics_manager:
+            self.metrics_manager.context = context
+        if self.workflow_manager:
+            self.workflow_manager.context = context
 
     def _initialize_loggers(self) -> None:
         """
@@ -348,7 +373,9 @@ class AgentContext(BaseModel):
         return self.config.max_context_tokens
 
     @property
-    def context_pruning_strategy(self) -> Literal["conservative", "balanced", "aggressive"]:
+    def context_pruning_strategy(
+        self,
+    ) -> Literal["conservative", "balanced", "aggressive"]:
         """Delegate to config.context_pruning_strategy."""
         return self.config.context_pruning_strategy
 
@@ -378,7 +405,9 @@ class AgentContext(BaseModel):
         return self.config.reasoning_strategy
 
     @property
-    def tool_use_policy(self) -> Literal["always", "required_only", "adaptive", "never"]:
+    def tool_use_policy(
+        self,
+    ) -> Literal["always", "required_only", "adaptive", "never"]:
         """Delegate to config.tool_use_policy."""
         return self.config.tool_use_policy
 
@@ -517,6 +546,7 @@ class AgentContext(BaseModel):
         """Get the reasoning engine with lazy initialization."""
         if self._reasoning_engine is None:
             from reactive_agents.core.reasoning.engine import get_reasoning_engine
+
             self._reasoning_engine = get_reasoning_engine(self)
         return self._reasoning_engine
 
@@ -530,7 +560,10 @@ class AgentContext(BaseModel):
 
     def get_tool_names(self) -> List[str]:
         """Get names of available tools."""
-        return self.tool_manager.get_available_tool_names() if self.tool_manager else []
+        if self.tool_manager:
+            tool_names = self.tool_manager.get_available_tool_names()
+            return list(tool_names) if isinstance(tool_names, set) else tool_names
+        return []
 
     def get_tool_signatures(self) -> List[Any]:
         """Get tool signatures."""

@@ -3,7 +3,7 @@ import os
 import time
 import asyncio
 import random
-from typing import List, Dict, Any, Optional, Type, Union
+from typing import List, Dict, Any, Optional, Type, Union, AsyncIterator
 from openai import BaseModel
 import requests
 from anthropic import Anthropic
@@ -11,7 +11,7 @@ from anthropic.types import Message, MessageParam, TextBlock, ToolUseBlock
 from anthropic import APIError, RateLimitError, APITimeoutError
 import instructor
 
-from .base import BaseModelProvider, CompletionMessage, CompletionResponse
+from .base import BaseModelProvider, CompletionMessage, CompletionResponse, StreamChunk
 
 
 class AnthropicModelProvider(BaseModelProvider):
@@ -764,6 +764,176 @@ class AnthropicModelProvider(BaseModelProvider):
         except Exception as e:
             self._handle_error(e, "chat_completion")
             raise Exception(f"Anthropic Chat Completion Error: {str(e)}")
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion tokens from Anthropic.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects containing content and metadata
+        """
+        try:
+            if not self.is_claude_3:
+                # Legacy models don't support streaming well, fall back to non-streaming
+                self._warn_parameter(
+                    f"Legacy model {self.model} has limited streaming support, falling back",
+                    level="warning",
+                )
+                response = await self._get_legacy_completion(
+                    messages=messages, options=options, **kwargs
+                )
+                yield StreamChunk(
+                    content=response.message.content,
+                    role=response.message.role,
+                    finish_reason=response.done_reason,
+                    is_final=True,
+                    prompt_tokens=response.prompt_tokens,
+                    completion_tokens=response.completion_tokens,
+                    total_tokens=response.total_tokens,
+                    model=response.model,
+                )
+                return
+
+            # Extract system message and clean messages
+            system_message, cleaned_messages = self._extract_system_message(messages)
+            cleaned_messages = [self._clean_message(msg) for msg in cleaned_messages]
+
+            # Merge options
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Convert OpenAI-style parameters to Anthropic-native format
+            native_options = self.get_native_params(merged_options)
+            # Remove stream from options as we handle it explicitly
+            native_options.pop("stream", None)
+
+            # Prepare API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": cleaned_messages,
+                **native_options,
+            }
+
+            # Add system message if present
+            if system_message:
+                api_params["system"] = system_message
+
+            # Add tools if present (convert to Anthropic format)
+            if tools:
+                api_params["tools"] = self._convert_tools_to_anthropic_format(tools)
+
+            chunk_index = 0
+            accumulated_content = ""
+            accumulated_tool_calls: list[dict] = []
+            current_tool_call: dict = {}
+            input_tokens = 0
+            output_tokens = 0
+
+            # Use Anthropic's streaming API
+            with self.client.messages.stream(**api_params) as stream:
+                for event in stream:
+                    # Handle different event types
+                    if event.type == "message_start":
+                        # Get initial token counts
+                        if hasattr(event, "message") and hasattr(event.message, "usage"):
+                            input_tokens = event.message.usage.input_tokens
+
+                    elif event.type == "content_block_start":
+                        # Check if this is a tool use block
+                        if hasattr(event, "content_block"):
+                            block = event.content_block
+                            if hasattr(block, "type") and block.type == "tool_use":
+                                current_tool_call = {
+                                    "id": block.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": block.name,
+                                        "arguments": "",
+                                    },
+                                }
+
+                    elif event.type == "content_block_delta":
+                        delta = event.delta
+                        content = ""
+
+                        if hasattr(delta, "text"):
+                            content = delta.text
+                            accumulated_content += content
+                        elif hasattr(delta, "partial_json"):
+                            # Accumulate tool call arguments
+                            if current_tool_call:
+                                current_tool_call["function"]["arguments"] += delta.partial_json
+
+                        if content:
+                            yield StreamChunk(
+                                content=content,
+                                role="assistant",
+                                chunk_index=chunk_index,
+                                model=self.model,
+                            )
+                            chunk_index += 1
+
+                    elif event.type == "content_block_stop":
+                        # Finalize tool call if we have one
+                        if current_tool_call:
+                            # Parse the accumulated JSON arguments
+                            try:
+                                args_str = current_tool_call["function"]["arguments"]
+                                if args_str:
+                                    current_tool_call["function"]["arguments"] = json.loads(args_str)
+                            except json.JSONDecodeError:
+                                # Keep as string if not valid JSON
+                                pass
+                            accumulated_tool_calls.append(current_tool_call)
+                            current_tool_call = {}
+
+                    elif event.type == "message_delta":
+                        # Get output tokens from message delta
+                        if hasattr(event, "usage"):
+                            output_tokens = event.usage.output_tokens
+
+                    elif event.type == "message_stop":
+                        # Final message - yield with complete info
+                        pass
+
+                # Yield final chunk with token usage and tool calls
+                final_chunk = StreamChunk(
+                    content="",
+                    role="assistant",
+                    finish_reason="end_turn",
+                    tool_calls=accumulated_tool_calls if accumulated_tool_calls else None,
+                    is_final=True,
+                    prompt_tokens=input_tokens,
+                    completion_tokens=output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    chunk_index=chunk_index,
+                    model=self.model,
+                )
+                yield final_chunk
+
+        except RateLimitError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Anthropic Rate Limit Error: {str(e)}")
+        except APITimeoutError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Anthropic API Timeout Error: {str(e)}")
+        except APIError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Anthropic API Error: {str(e)}")
+        except Exception as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"Anthropic Stream Chat Completion Error: {str(e)}")
 
     async def _get_legacy_completion(self, **kwargs) -> CompletionResponse:
         """

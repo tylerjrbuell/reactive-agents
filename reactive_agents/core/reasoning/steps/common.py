@@ -38,22 +38,41 @@ class EvaluateTaskCompletionStep(BaseReasoningStep):
         if not self.strategy:
             raise ValueError("Strategy not set on step")
 
-        # Get a summary of what has been done.
-        # This part is strategy-specific.
-        summary = ""
-        if isinstance(state, PlanExecuteReflectState):
-            summary = state.current_plan.get_summary()
-        elif isinstance(state, ReactiveState):
-            summary = state.get_execution_summary().get("last_response", "")
+        # Extract comprehensive execution context from state
+        exec_summary = state.get_execution_summary()
+        progress_summary = ""
+        latest_output = ""
+        execution_log = ""
 
-        # Use the evaluation component
-        evaluation_result = await self.strategy.evaluate(task, progress_summary=summary)
+        if isinstance(state, PlanExecuteReflectState):
+            progress_summary = state.current_plan.get_summary()
+        elif isinstance(state, ReactiveState):
+            progress_summary = f"Total: {exec_summary.get('total_responses', 0)}, Success: {exec_summary.get('successful_responses', 0)}"
+            latest_output = exec_summary.get("last_response", "")
+
+        # Build execution log from session messages
+        if self.context and self.context.session:
+            messages = self.context.session.messages[-5:]  # Last 5 messages for context
+            execution_log = "\n".join(
+                [
+                    f"{m.get('role', 'unknown')}: {str(m.get('content', ''))[:100]}"
+                    for m in messages
+                ]
+            )
+
+        # Use the evaluation component with all context
+        evaluation_result = await self.strategy.evaluate(
+            task,
+            progress_summary=progress_summary,
+            latest_output=latest_output,
+            execution_log=execution_log,
+        )
 
         if evaluation_result.is_complete:
             if self.agent_logger:
                 self.agent_logger.info("Evaluation confirms task is complete.")
 
-            completion = await self.strategy.complete_task(task, summary)
+            completion = await self.strategy.complete_task(task, progress_summary)
             return StrategyResult.create(
                 payload=FinishTaskPayload(
                     action=StrategyAction.FINISH_TASK,

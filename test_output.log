@@ -1,0 +1,52 @@
+2026-01-10 13:29:24 [94mReactiveAgentBuilder:INFO[0m - Created AgentConfig for agent: BasicAgent[0m
+2026-01-10 13:29:24 [94mBasicAgent:INFO[0m - Creating components for agent: BasicAgent[0m
+2026-01-10 13:29:24 [94mBasicAgent:INFO[0m - Event bus initialized.[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Initialized model provider: ollama:cogito:14b[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Initializing memory manager for BasicAgent with json memory enabled[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Memory file path set to: /home/tylerbuell/Documents/AIProjects/reactive-agents/reactive_agents/storage/memory[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - No existing memory file found for BasicAgent. Creating new memory.[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Context manager initialized.[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - ComponentSet created: ComponentSet(agent_logger, tool_logger, result_logger, model_provider, event_bus, tool_manager, memory_manager, metrics_manager, workflow_manager, context_manager)[0m
+2026-01-10 13:29:25 [94mReactiveAgentBuilder:INFO[0m - Created components: ComponentSet(agent_logger, tool_logger, result_logger, model_provider, event_bus, tool_manager, memory_manager, metrics_manager, workflow_manager, context_manager)[0m
+2026-01-10 13:29:25 [94mReactiveAgentBuilder:INFO[0m - Injected components into AgentContext[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Base Agent 'BasicAgent' initialized with context.[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered strategy: plan_execute_reflect[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered component-based strategy: PlanExecuteReflectStrategy[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered strategy: reactive[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered component-based strategy: ReactiveStrategy[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered strategy: reflect_decide_act[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Registered component-based strategy: ReflectDecideActStrategy[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Registered 3 strategies (3 component-based, 0 regular)[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🏗️  Core systems initialized | State machine, error recovery ready[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🚀 ExecutionEngine | Initialized and ready[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🔧 Initializing reactive agent...[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - Initializing BasicAgent...[0m
+2026-01-10 13:29:25 [33mBasicAgent:WARNING[0m - No MCP client or custom tools provided[0m
+2026-01-10 13:29:25 [33mBasicAgent Tool:INFO[0m - Injecting internal 'final_answer' tool.[0m
+2026-01-10 13:29:25 [33mBasicAgent Tool:INFO[0m - Initialized with 1 total tool(s): final_answer[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - BasicAgent initialized successfully[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - ✅ Reactive agent initialized[0m
+2026-01-10 13:29:25 [94mReactiveAgentBuilder:INFO[0m - Successfully built ReactiveAgent: BasicAgent[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🚀 Starting reactive agent with task: What is 2 + 2? Just the number....[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Strategy manager reset[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Context manager: Set active strategy to None[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Set active strategy: reactive[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Context manager: Set active strategy to reactive[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🎯 Using configured strategy: reactive (dynamic switching enabled)[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Started tracking strategy: reactive[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🚀 ReactiveStrategy | Initialized and ready for task execution[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Initialized strategy: reactive[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - 🔄 ExecutionEngine | Iteration 1/3 | Strategy: reactive[0m
+2026-01-10 13:29:25 [94mBasicAgent:INFO[0m - ⚡ Taking a reactive action...[0m
+2026-01-10 13:29:25 [36mBasicAgent:DEBUG[0m - Thinking (chat completion, tool_use=True)...[0m
+2026-01-10 13:29:28 [36mBasicAgent:DEBUG[0m - Chat completion result: message=CompletionMessage(content='', role='assistant', thinking=None, tool_calls=[{'function': {'name': 'final_answer', 'arguments': {'answer': '4'}}}], images=None) model='cogito:14b' done=True done_reason='stop' prompt_tokens=194 completion_tokens=20 total_tokens=0 prompt_eval_duration=299468244 eval_duration=None total_duration=3315459981 load_duration=75669505 created_at='2026-01-10T18:29:28.597355854Z' context_length=None[0m
+2026-01-10 13:29:28 [94mBasicAgent:INFO[0m - Executing tool: final_answer[0m
+2026-01-10 13:29:28 [33mBasicAgent Tool:INFO[0m - Using tool: final_answer with {'answer': '4'}[0m
+2026-01-10 13:29:28 [94mBasicAgent:INFO[0m - FinalAnswerTool: Set session.final_answer = 4...[0m
+2026-01-10 13:29:28 [33mBasicAgent Tool:INFO[0m - Tool final_answer completed in 0.00s[0m
+2026-01-10 13:29:28 [36mBasicAgent Tool:DEBUG[0m - Result: ['4'][0m
+2026-01-10 13:29:28 [33mBasicAgent Tool:INFO[0m - 🔧 ToolExecutor: final_answer tool completed successfully[0m
+2026-01-10 13:29:29 [36mBasicAgent Tool:DEBUG[0m - Tool Action Summary: [TOOL SUMMARY] Used final_answer with answer='4' and observed ['4'][0m
+2026-01-10 13:29:29 [94mBasicAgent:INFO[0m - 🔎 Evaluating task completion...[0m
+2026-01-10 13:29:29 [36mBasicAgent:DEBUG[0m - Starting task evaluation[0m
+2026-01-10 13:29:29 [36mBasicAgent:DEBUG[0m - TaskEvaluation: Evaluating task completion for: What is 2 + 2? Just the number....[0m

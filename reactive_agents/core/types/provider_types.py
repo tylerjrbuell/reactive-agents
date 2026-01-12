@@ -55,9 +55,28 @@ class ResponseFormat(Enum):
     TOOL_CALLS = "tool_calls"
 
 
+class StreamChunk(BaseModel):
+    """Single chunk in a streaming response."""
+
+    content: str = ""
+    role: Optional[str] = None
+    finish_reason: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    is_final: bool = False
+
+    # Token usage (only populated in final chunk)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+    # Chunk metadata
+    chunk_index: int = 0
+    model: Optional[str] = None
+
+
 class CompletionMessage(BaseModel):
     """Message in a completion request/response."""
-    
+
     content: str
     role: Optional[str] = None
     thinking: Optional[str] = None  # For models that support thinking

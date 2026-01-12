@@ -51,11 +51,22 @@ class FinalAnswerOutput(BaseModel):
     final_answer: str = Field(
         description="Comprehensive answer that directly addresses the original task"
     )
-    summary: str = Field(description="Brief summary of what was accomplished")
-    key_findings: List[str]
-    confidence: float = Field(ge=0.0, le=1.0)
-    methodology: str = Field(description="How the task was approached")
-    limitations: List[str] = Field(description="Any limitations or caveats")
+    summary: str = Field(
+        default="Task completed", description="Brief summary of what was accomplished"
+    )
+    key_findings: List[str] = Field(
+        default_factory=list, description="Key findings from the task execution"
+    )
+    confidence: float = Field(
+        default=0.8, ge=0.0, le=1.0, description="Confidence in the answer quality"
+    )
+    methodology: str = Field(
+        default="Task executed using available tools and reasoning",
+        description="How the task was approached",
+    )
+    limitations: List[str] = Field(
+        default_factory=list, description="Any limitations or caveats"
+    )
 
 
 class StrategyTransitionOutput(BaseModel):

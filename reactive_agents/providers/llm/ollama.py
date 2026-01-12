@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from typing import List, Literal, Optional, Dict, Any, Type
+from typing import List, Literal, Optional, Dict, Any, Type, AsyncIterator
 
 from reactive_agents.core.types.tool_types import ToolCall
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from .base import (
     BaseModelProvider,
     CompletionMessage,
     CompletionResponse,
+    StreamChunk,
 )
 
 DEFAULT_OPTIONS = {"temperature": 0.2, "num_ctx": 10000}
@@ -420,6 +421,100 @@ class OllamaModelProvider(BaseModelProvider):
             self._handle_error(e, "chat_completion")
             # This line will never be reached due to _handle_error raising the exception
             # But we need it for type checking
+            raise
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion tokens from Ollama.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects containing content and metadata
+        """
+        try:
+            # Handle tool calling compatibility
+            use_native_tools, manual_tool_calls = (
+                await self._handle_tool_calling_compatibility(
+                    messages=messages, tools=tools, **kwargs
+                )
+            )
+
+            # If we have manual tool calls, yield them and return
+            if manual_tool_calls:
+                yield StreamChunk(
+                    content="",
+                    role="assistant",
+                    tool_calls=manual_tool_calls,
+                    is_final=True,
+                    model=self.model,
+                )
+                return
+
+            # Convert OpenAI-style options to Ollama-native format
+            merged_options = {**DEFAULT_OPTIONS, **(options or {})}
+            native_options = self.get_native_params(merged_options)
+
+            chunk_index = 0
+            accumulated_content = ""
+            accumulated_thinking = ""
+            accumulated_tool_calls: list[dict] = []
+
+            # Stream from Ollama
+            async for chunk in await self.client.chat(
+                model=self.model,
+                messages=messages,
+                stream=True,
+                tools=tools if use_native_tools else [],
+                options=native_options,
+            ):
+                content = chunk.message.content or ""
+                thinking = chunk.message.thinking or ""
+                accumulated_content += content
+                accumulated_thinking += thinking
+
+                # Handle tool calls in streaming
+                if chunk.message.tool_calls:
+                    for tool_call in chunk.message.tool_calls:
+                        accumulated_tool_calls.append(tool_call.model_dump())
+
+                # Check if this is the final chunk
+                is_final = chunk.done or False
+
+                # Build the stream chunk
+                stream_chunk = StreamChunk(
+                    content=content,
+                    role=chunk.message.role or "assistant",
+                    finish_reason=chunk.done_reason if is_final else None,
+                    tool_calls=accumulated_tool_calls if is_final and accumulated_tool_calls else None,
+                    is_final=is_final,
+                    chunk_index=chunk_index,
+                    model=chunk.model or self.model,
+                )
+
+                # Add token usage on final chunk
+                if is_final:
+                    stream_chunk.prompt_tokens = int(chunk.prompt_eval_count or 0)
+                    stream_chunk.completion_tokens = int(chunk.eval_count or 0)
+                    stream_chunk.total_tokens = (
+                        stream_chunk.prompt_tokens + stream_chunk.completion_tokens
+                    )
+
+                yield stream_chunk
+                chunk_index += 1
+
+        except Exception as e:
+            self._handle_error(e, "stream_chat_completion")
             raise
 
     async def _get_provider_completion(self, **kwargs) -> CompletionResponse:

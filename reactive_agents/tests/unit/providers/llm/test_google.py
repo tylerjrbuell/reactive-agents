@@ -261,7 +261,7 @@ class TestGoogleModelProvider:
         """Test text completion method."""
         provider = GoogleModelProvider(model="gemini-2.5-flash")
 
-        with patch.object(provider, "get_chat_completion") as mock_chat:
+        with patch.object(provider, "_get_provider_chat_completion") as mock_chat:
             mock_chat.return_value = CompletionResponse(
                 message=CompletionMessage(content="Test response", role="assistant"),
                 model="gemini-2.5-flash",
@@ -275,7 +275,7 @@ class TestGoogleModelProvider:
             assert isinstance(result, CompletionResponse)
             assert result.message.content == "Test response"
 
-            # Check that chat completion was called with correct messages
+            # Check that _get_provider_chat_completion was called with correct messages
             mock_chat.assert_called_once()
             call_args = mock_chat.call_args[1]
             messages = call_args["messages"]

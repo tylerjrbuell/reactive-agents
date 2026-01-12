@@ -16,9 +16,10 @@ from reactive_agents.core.context.context_protocol import ContextProtocol
 
 class FinalAnswerInput(ToolInput):
     """Input schema for the final_answer tool."""
+
     answer: str = Field(
         ...,
-        description="The final textual answer to the user's query as a complete response to the original task."
+        description="The final textual answer to the user's query as a complete response to the original task.",
     )
 
 
@@ -77,7 +78,7 @@ class FinalAnswerTool(Tool):
             function=None,  # We override use() directly
             input_schema=FinalAnswerInput,
             category="system",
-            **data
+            **data,
         )
         self.context = context
 

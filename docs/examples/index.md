@@ -5,6 +5,7 @@ Learn by example with these practical demonstrations.
 ## Getting Started Examples
 
 - [Basic Agent](basic-agent.md) - Your first agent
+- [Streaming](streaming.md) - Real-time token streaming from any provider
 - [Tool Usage](tool-usage.md) - Creating and using custom tools
 - [Multi-Strategy](multi-strategy.md) - Working with different reasoning strategies
 

@@ -350,9 +350,7 @@ class PlanningComponent(BaseComponent):
         if not thinking_result or not thinking_result.result_json:
             if self.agent_logger:
                 self.agent_logger.warning("Failed to generate valid plan")
-            return Plan(
-                plan_steps=[]
-            )
+            return Plan(plan_steps=[])
         try:
             return Plan(**thinking_result.result_json)
         except Exception as e:
@@ -607,6 +605,21 @@ class TaskEvaluationComponent(BaseComponent):
         """
         self.log_usage(f"Evaluating task completion for: {task[:50]}...")
 
+        # Fast-path: Check if final_answer has already been set
+        # Use engine.context to get the current live context, not the cached one
+        final_ans = self.engine.context.session.final_answer
+        if final_ans:
+            if self.agent_logger:
+                self.agent_logger.debug(
+                    "Final answer has been set, marking task complete"
+                )
+            return CompletionResult(
+                is_complete=True,
+                completion_score=1.0,
+                reasoning="Final answer has been provided",
+                final_answer=final_ans,
+            )
+
         eval_context = TaskGoalEvaluationContext(
             task_description=task,
             progress_summary=progress_summary,
@@ -614,11 +627,10 @@ class TaskEvaluationComponent(BaseComponent):
             execution_log=execution_log,
             meta=meta or {},
         )
-        print(f"eval_context: {eval_context}")
 
         evaluator = TaskGoalEvaluator(
             model_provider=self.engine.context.model_provider,
-            agent_context=self.context,
+            agent_context=self.engine.context,
             eval_context=eval_context,
         )
 

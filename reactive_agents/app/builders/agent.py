@@ -1521,7 +1521,7 @@ class ReactiveAgentBuilder:
 
             config = {key: self._config[key] for key in valid_dynamic_config_keys}
 
-            result = await model_provider.get_completion(
+            completion_result = await model_provider.get_completion(
                 system="""
                 Role: You are an agent configuration builder. You are given a description of the agent and you need to build an agent configuration based on the description and the initial config. Do not stray from the initial config keys. Respond in only valid json.
                 Instructions:
@@ -1538,7 +1538,32 @@ class ReactiveAgentBuilder:
                 """,
                 format="json",
             )
-            config = json.loads(result.message.content)
+
+            # Parse the JSON response with error handling
+            # get_completion without response_model returns CompletionResponse
+            from reactive_agents.providers.llm.base import CompletionResponse
+            if not isinstance(completion_result, CompletionResponse):
+                self._logger.warning("Unexpected response type, using default config")
+                content = None
+            else:
+                content = completion_result.message.content
+            if not content:
+                self._logger.warning("Empty response from model, using default config")
+            else:
+                # Clean potential markdown code blocks
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                elif content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+
+                try:
+                    config = json.loads(content)
+                except json.JSONDecodeError as e:
+                    self._logger.warning(f"Failed to parse config JSON: {e}, using default config")
             self._logger.info(f"Agent config: {json.dumps(config, indent=4)}")
             self._config.update(config)
 

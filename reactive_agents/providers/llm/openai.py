@@ -1,13 +1,14 @@
 import json
 import os
 import time
-from typing import List, Dict, Any, Optional, Union, Type
+from typing import List, Dict, Any, Optional, Union, Type, AsyncIterator
 from openai import BaseModel, OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai import OpenAIError, RateLimitError, APITimeoutError
 import instructor
 
 from .base import BaseModelProvider, CompletionMessage, CompletionResponse
+from reactive_agents.core.types.provider_types import StreamChunk
 
 
 class OpenAIModelProvider(BaseModelProvider):
@@ -363,6 +364,127 @@ class OpenAIModelProvider(BaseModelProvider):
         except Exception as e:
             self._handle_error(e, "chat_completion")
             raise Exception(f"OpenAI Chat Completion Error: {str(e)}")
+
+    async def _stream_provider_chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        options: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ) -> AsyncIterator[StreamChunk]:
+        """
+        Stream chat completion from OpenAI.
+
+        Args:
+            messages: List of message dictionaries
+            tools: Optional list of tool definitions
+            options: Model-specific options
+            **kwargs: Additional arguments
+
+        Yields:
+            StreamChunk objects containing streamed content
+        """
+        try:
+            # Clean messages
+            cleaned_messages = [self._clean_message(msg) for msg in messages]
+            cleaned_messages = self._validate_message_sequence(cleaned_messages)
+
+            # Merge options
+            merged_options = {**self.default_options, **(options or {})}
+
+            # Prepare API call parameters
+            api_params = {
+                "model": self.model,
+                "messages": cleaned_messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                **merged_options,
+            }
+
+            # Add tools if provided
+            if tools:
+                api_params["tools"] = tools
+                api_params["tool_choice"] = kwargs.get("tool_choice", "auto")
+
+            # Handle JSON format
+            format_param = kwargs.get("format", "")
+            if format_param == "json":
+                api_params["response_format"] = {"type": "json_object"}
+
+            # Create streaming completion
+            stream = self.client.chat.completions.create(**api_params)
+
+            chunk_index = 0
+            accumulated_content = ""
+            accumulated_tool_calls: List[Dict[str, Any]] = []
+            finish_reason = None
+            prompt_tokens = 0
+            completion_tokens = 0
+
+            for chunk in stream:
+                if not chunk.choices:
+                    # Final chunk with usage info
+                    if chunk.usage:
+                        prompt_tokens = chunk.usage.prompt_tokens or 0
+                        completion_tokens = chunk.usage.completion_tokens or 0
+                    continue
+
+                delta = chunk.choices[0].delta
+                finish_reason = chunk.choices[0].finish_reason
+
+                # Extract content
+                content = delta.content or ""
+                accumulated_content += content
+
+                # Extract tool calls from delta
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        tc_index = tc.index
+                        # Extend list if needed
+                        while len(accumulated_tool_calls) <= tc_index:
+                            accumulated_tool_calls.append({
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            })
+                        # Update tool call
+                        if tc.id:
+                            accumulated_tool_calls[tc_index]["id"] = tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                accumulated_tool_calls[tc_index]["function"]["name"] = tc.function.name
+                            if tc.function.arguments:
+                                accumulated_tool_calls[tc_index]["function"]["arguments"] += tc.function.arguments
+
+                # Determine if this is the final chunk
+                is_final = finish_reason is not None
+
+                yield StreamChunk(
+                    content=content,
+                    role=delta.role if hasattr(delta, "role") and delta.role else "assistant",
+                    finish_reason=finish_reason,
+                    tool_calls=accumulated_tool_calls if is_final and accumulated_tool_calls else None,
+                    is_final=is_final,
+                    prompt_tokens=prompt_tokens if is_final else 0,
+                    completion_tokens=completion_tokens if is_final else 0,
+                    total_tokens=(prompt_tokens + completion_tokens) if is_final else 0,
+                    chunk_index=chunk_index,
+                    model=self.model,
+                )
+                chunk_index += 1
+
+        except RateLimitError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"OpenAI Rate Limit Error: {str(e)}")
+        except APITimeoutError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"OpenAI API Timeout Error: {str(e)}")
+        except OpenAIError as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"OpenAI API Error: {str(e)}")
+        except Exception as e:
+            self._handle_error(e, "stream_chat_completion")
+            raise Exception(f"OpenAI Stream Chat Completion Error: {str(e)}")
 
     async def _get_provider_completion(self, **kwargs) -> CompletionResponse:
         """

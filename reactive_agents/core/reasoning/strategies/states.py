@@ -10,7 +10,10 @@ from typing import List, Dict, Any, Optional
 
 from pydantic import Field
 
-from reactive_agents.core.types.session_types import BaseStrategyState, register_strategy
+from reactive_agents.core.types.session_types import (
+    BaseStrategyState,
+    register_strategy,
+)
 from reactive_agents.core.types.reasoning_component_types import Plan, ReflectionResult
 
 
@@ -54,6 +57,9 @@ class ReactiveState(BaseStrategyState):
             "error_count": self.error_count,
             "tool_success_rate": self.tool_success_rate,
             "response_quality_score": self.response_quality_score,
+            "last_response": self.last_response,
+            "tool_responses": self.tool_responses,
+            "execution_history": self.execution_history,
         }
 
     def record_response_result(self, response_result: Dict[str, Any]) -> None:

@@ -56,8 +56,14 @@ nav:
   - Examples:
     - examples/index.md
     - Basic Agent: examples/basic-agent.md
+    - Streaming: examples/streaming.md
     - Tool Usage: examples/tool-usage.md
     - Multi-Strategy: examples/multi-strategy.md
+  - Development:
+    - development/index.md
+    - Roadmap: development/roadmap.md
+    - Contributing: development/contributing.md
+    - Changelog: development/changelog.md
 
 plugins:
   - search
@@ -86,6 +92,8 @@ plugins:
 markdown_extensions:
   - abbr
   - admonition
+  - pymdownx.snippets:
+      base_path: ["."]
   - attr_list
   - def_list
   - footnotes
