@@ -67,6 +67,18 @@ async def test_complex_multi_step_reasoning(model: str = "cogito:14b") -> bool:
 
         print(f"Expected tools used: {len(tools_found)}/{len(expected_tools)}")
 
+        # Performance metrics
+        efficiency = (
+            len(tools_found) / result.session.iterations
+            if result.session.iterations > 0
+            else 0
+        )
+        print(f"\n📊 Performance Metrics:")
+        print(f"   Efficiency (tools/iteration): {efficiency:.2f}")
+        print(f"   Expected iterations: 4-6")
+        print(f"   Actual iterations: {result.session.iterations}")
+        print(f"   Within budget: {result.session.iterations <= 6}")
+
         await agent.close()
         return result.was_successful() and len(tools_found) >= 2
 
@@ -177,6 +189,17 @@ async def test_strategy_switching(model: str = "cogito:14b") -> bool:
         print(f"Iterations: {result.session.iterations}")
         print(f"Success: {result.was_successful()}")
 
+        # Check for strategy switching evidence
+        strategy_switched = (
+            hasattr(result.session, "strategy_changes")
+            and len(result.session.strategy_changes) > 0
+        )
+        print(f"\n🔍 Strategy Switching Analysis:")
+        print(f"   Dynamic switching enabled: True")
+        print(f"   Strategy changes detected: {strategy_switched}")
+        print(f"   ⚠️  Expected: Should switch from REACTIVE to PLAN_EXECUTE_REFLECT")
+        print(f"   ❌ Actual: Strategy switching NEVER triggers (known issue)")
+
         await agent.close()
         return result.was_successful()
 
@@ -238,6 +261,14 @@ async def test_context_management(model: str = "cogito:14b") -> bool:
         )  # 42 * 2 = 84
 
         print(f"\nOverall Success: {success}")
+
+        # Analyze task completion patterns
+        print(f"\n🔍 Task Completion Analysis:")
+        print(f"   Task 1 (conversational): {results[0].session.iterations} iterations")
+        print(f"   ⚠️  Expected: 1 iteration (just acknowledge)")
+        print(f"   ❌ Actual: Takes 3+ iterations (completion detection issue)")
+        print(f"   Task 3 (action): {results[2].session.iterations} iterations")
+        print(f"   Context preserved: {success}")
 
         await agent.close()
         return success

@@ -222,8 +222,27 @@ class SystemPrompt(BasePrompt):
         if context.available_tools:
             base_prompt += f"\nAvailable Tools: {', '.join(context.available_tools)}"
 
-        # Add static guidelines only
-        base_prompt += "\n\n# Guidelines: Respond to the user's task using your tools and reasoning abilities. When you have gathered the necessary information, use the final_answer tool to provide your complete response."
+        # Add stronger, more explicit guidelines about final_answer
+        base_prompt += """\n\n# CRITICAL GUIDELINES:
+1. Use your tools and reasoning abilities to complete the task
+2. **YOU MUST CALL THE final_answer TOOL TO SIGNAL TASK COMPLETION**
+3. Simply providing a text response is NOT enough - you MUST call final_answer
+4. Once you have the answer or have completed the work, IMMEDIATELY call final_answer
+5. Do not wait for multiple iterations - call final_answer as soon as you can provide a complete response
+
+# How to Complete Tasks:
+- Simple questions (math, facts, etc.): Call final_answer with the answer immediately
+- Tasks requiring tools: Use tools to gather info, then call final_answer with results
+- Multi-step tasks: Complete all steps, then call final_answer with summary
+
+# Example Flow:
+Task: "What is 2+2?"
+✅ CORRECT: Call final_answer(answer="4")
+❌ WRONG: Just say "4" without calling final_answer
+
+Task: "Get weather in Tokyo"
+✅ CORRECT: Call get_weather(location="Tokyo"), then call final_answer(answer="The weather...")
+❌ WRONG: Call get_weather, provide text response without final_answer"""
 
         return base_prompt
 

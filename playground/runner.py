@@ -15,6 +15,8 @@ import asyncio
 import sys
 from typing import Dict, Any
 
+from scipy import signal
+
 # Test modules - use relative imports
 from . import test_streaming
 from . import test_agents
@@ -22,6 +24,9 @@ from . import test_strategies
 from . import test_workflows
 from . import test_stress
 from . import test_real_world
+from . import test_memory
+from . import test_reasoning_edge_cases
+from . import test_system_tools
 
 
 # Registry of available test suites
@@ -49,6 +54,18 @@ TEST_SUITES = {
     "real-world": {
         "module": test_real_world,
         "description": "Real-world scenarios - customer support, data analysis, etc.",
+    },
+    "memory": {
+        "module": test_memory,
+        "description": "Memory system tests - persistence, retrieval, learning",
+    },
+    "reasoning-edge-cases": {
+        "module": test_reasoning_edge_cases,
+        "description": "Reasoning edge cases - loop detection, strategy switching, completion, memory integration (EXPECTED FAILURES)",
+    },
+    "system-tools": {
+        "module": test_system_tools,
+        "description": "System tools tests - final answer, request clarification,stuck signaling",
     },
 }
 

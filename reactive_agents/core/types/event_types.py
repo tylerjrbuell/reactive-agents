@@ -33,6 +33,12 @@ class AgentStateEvent(str, Enum):
     TOKENS_USED = "tokens_used"
     SNAPSHOT_TAKEN = "snapshot_taken"
 
+    # Meta-Action Events (Escape Hatches)
+    CLARIFICATION_REQUESTED = "clarification_requested"
+    STUCK_SIGNALED = "stuck_signaled"
+    STRATEGY_SWITCH_REQUESTED = "strategy_switch_requested"
+    LOOP_DETECTED = "loop_detected"
+
 
 # Type definitions for different event data structures
 class BaseEventData(TypedDict):
@@ -177,6 +183,17 @@ class CancelledEventData(BaseEventData):
     pass
 
 
+# --- Loop detection event data ---
+class LoopDetectedEventData(BaseEventData):
+    """Data for loop detected events"""
+
+    loop_type: str
+    loop_length: int
+    tool_name: str
+    recommendation: str
+    confidence: float
+
+
 # Map event types to their corresponding data types
 EventDataMapping = {
     AgentStateEvent.SESSION_STARTED: SessionStartedEventData,
@@ -204,4 +221,6 @@ EventDataMapping = {
     AgentStateEvent.TERMINATED: TerminatedEventData,
     # --- Cancellation events ---
     AgentStateEvent.CANCELLED: CancelledEventData,
+    # --- Loop detection events ---
+    AgentStateEvent.LOOP_DETECTED: LoopDetectedEventData,
 }

@@ -4,14 +4,12 @@ This module provides the FinalAnswerTool which is automatically injected
 into agents to allow them to provide final answers and conclude tasks.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pydantic import Field
 
-from reactive_agents.core.tools.base import Tool, ToolInput
+from reactive_agents.core.tools.system_tool import SystemTool
+from reactive_agents.core.tools.base import ToolInput
 from reactive_agents.core.tools.abstractions import ToolResult
-
-# Import ContextProtocol at runtime so Pydantic can resolve the forward reference
-from reactive_agents.core.context.context_protocol import ContextProtocol
 
 
 class FinalAnswerInput(ToolInput):
@@ -23,7 +21,7 @@ class FinalAnswerInput(ToolInput):
     )
 
 
-class FinalAnswerTool(Tool):
+class FinalAnswerTool(SystemTool):
     """Tool for providing the final answer to the user's query.
 
     This tool is automatically injected into agents by the ToolManager
@@ -32,19 +30,18 @@ class FinalAnswerTool(Tool):
     When invoked, it sets the final answer in the agent context's session,
     signaling that the task is complete.
 
-    Attributes:
-        context: Reference to the agent context for setting the final answer
+    Example:
+        # Agent calls this when ready to provide final answer
+        await final_answer_tool.use({"answer": "The result is 42"})
+        # Sets context.session.final_answer = "The result is 42"
     """
 
-    # Override class-level defaults
+    # Tool metadata
     name: str = Field(default="final_answer")
     description: str = Field(
         default="Provides the final answer to the user's query and concludes the task."
     )
-    category: str = Field(default="system")
-
-    # Context reference (excluded from serialization)
-    context: Optional["ContextProtocol"] = Field(default=None, exclude=True)
+    input_schema: type[ToolInput] | None = FinalAnswerInput
 
     # Pre-defined tool definition for this tool
     _tool_def: Dict[str, Any] = {
@@ -64,23 +61,6 @@ class FinalAnswerTool(Tool):
             },
         },
     }
-
-    def __init__(self, context: "ContextProtocol", **data):
-        """Initialize the FinalAnswerTool.
-
-        Args:
-            context: The agent context to set the final answer in
-            **data: Additional configuration
-        """
-        super().__init__(
-            name="final_answer",
-            description="Provides the final answer to the user's query and concludes the task.",
-            function=None,  # We override use() directly
-            input_schema=FinalAnswerInput,
-            category="system",
-            **data,
-        )
-        self.context = context
 
     @property
     def tool_definition(self) -> Dict[str, Any]:
@@ -109,37 +89,14 @@ class FinalAnswerTool(Tool):
                 tool_name=self.name,
             )
 
-        if self.context is None:
-            return ToolResult.fail(
-                error="Context not configured.",
-                tool_name=self.name,
-            )
-
-        if self.context.session is None:
-            return ToolResult.fail(
-                error="Session not configured.",
-                tool_name=self.name,
-            )
-
         # Set the final answer in the context
-        self.context.session.final_answer = answer
+        if self.context.session:
+            self.context.session.final_answer = answer
 
         # Log final answer setting
         if hasattr(self.context, "agent_logger") and self.context.agent_logger:
             self.context.agent_logger.info(
-                f"FinalAnswerTool: Set session.final_answer = {answer[:50] if answer else 'None'}..."
+                f"✅ Final answer set: {answer[:50] if answer else 'None'}..."
             )
 
         return ToolResult.ok(value=answer, tool_name=self.name)
-
-    def __hash__(self) -> int:
-        """Make FinalAnswerTool hashable."""
-        return hash("final_answer")
-
-    def __eq__(self, other: object) -> bool:
-        """Check equality."""
-        if isinstance(other, FinalAnswerTool):
-            return True
-        if isinstance(other, Tool) and other.name == "final_answer":
-            return True
-        return False

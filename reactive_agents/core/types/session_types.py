@@ -81,6 +81,24 @@ class AgentSession(BaseModel):
     # Iteration tracking
     iterations: int = 0
 
+    # Agent self-correction signals (for escape hatch tools)
+    agent_signaled_stuck: bool = False
+    stuck_reason: Optional[str] = None
+    attempted_approaches: List[str] = Field(default_factory=list)
+
+    # Strategy switch requests
+    strategy_switch_requested: bool = False
+    strategy_switch_reason: Optional[str] = None
+    preferred_strategy: Optional[str] = None
+
+    # Clarification requests
+    clarification_requests: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # Loop detection state
+    loop_detected: bool = False
+    loop_details: Optional[Dict[str, Any]] = None
+    loop_detections: List[Dict[str, Any]] = Field(default_factory=list)  # Cumulative history
+
     # Scoring weights
     tool_usage_weight: float = Field(default=0.4, ge=0.0, le=1.0)
     progress_weight: float = Field(default=0.3, ge=0.0, le=1.0)

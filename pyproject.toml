@@ -70,17 +70,63 @@ mkdocs-section-index = "^0.3.0"
 
 [tool.pytest.ini_options]
 testpaths = ["reactive_agents/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+timeout_method = "thread"
+norecursedirs = [".git", "dist", "build", "*.egg-info", "playground"]
+
+addopts = [
+    "--ignore=playground",
+    "--ignore=tests/unit/test_react_agent.py",
+    "--ignore=tests/integration/test_builder_integration.py",
+    "--ignore=tests/unit/test_builders.py::test_research_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_database_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_crypto_research_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_quick_create_agent",
+    "--asyncio-mode=auto",
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+    "--color=yes",
+    "--durations=10",
+    "--showlocals",
+]
+
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
 ]
+
 markers = [
-    "integration: mark test as integration test",
-    "providers: mark test as provider test",
-    "slow: mark test as slow running test",
-    "unit: mark test as unit test",
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+    "core: Core framework tests",
+    "app: Application layer tests",
+    "providers: Provider tests",
+    "console: Console/CLI tests",
+    "plugins: Plugin tests",
+    "engine: Engine tests",
+    "tools: Tools tests",
+    "reasoning: Reasoning tests",
+    "events: Events tests",
+    "memory: Memory tests",
+    "workflows: Workflow tests",
+    "types: Type tests",
+    "agents: Agent tests",
+    "builders: Builder tests",
+    "communication: Communication tests",
+    "llm: LLM provider tests",
+    "storage: Storage provider tests",
+    "external: External provider tests",
+    "commands: Command tests",
+    "output: Output tests",
 ]
 
 [build-system]

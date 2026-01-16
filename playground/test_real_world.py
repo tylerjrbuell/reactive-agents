@@ -11,6 +11,7 @@ import time
 import json
 
 from reactive_agents import ReactiveAgentBuilder, Provider, ReasoningStrategies
+from reactive_agents.core.tools.decorators import tool
 from .tools import get_weather, get_crypto_price, calculate
 
 
@@ -26,6 +27,7 @@ async def test_customer_support_agent(model: str = "cogito:14b") -> bool:
 
     try:
 
+        @tool()
         def lookup_order(order_id: str) -> Dict[str, Any]:
             """Look up order details."""
             # Simulated order database
@@ -45,6 +47,7 @@ async def test_customer_support_agent(model: str = "cogito:14b") -> bool:
             }
             return orders.get(order_id, {"error": "Order not found"})
 
+        @tool()
         def check_inventory(item: str) -> Dict[str, Any]:
             """Check item inventory."""
             inventory = {
@@ -116,6 +119,7 @@ async def test_data_analysis_agent(model: str = "cogito:14b") -> bool:
 
     try:
 
+        @tool()
         def get_sales_data() -> List[Dict[str, Any]]:
             """Retrieve sales data."""
             return [
@@ -124,6 +128,7 @@ async def test_data_analysis_agent(model: str = "cogito:14b") -> bool:
                 {"product": "C", "units": 75, "revenue": 1125},
             ]
 
+        @tool()
         def calculate_stats(numbers: List[float]) -> Dict[str, float | str]:
             """Calculate basic statistics."""
             if not numbers:
@@ -175,6 +180,18 @@ async def test_data_analysis_agent(model: str = "cogito:14b") -> bool:
         print(f"Mentioned Revenue: {has_revenue}")
         print(f"Product Analysis: {has_product_analysis}")
 
+        # Performance analysis
+        efficiency = (
+            len(result.session.successful_tools) / result.session.iterations
+            if result.session.iterations > 0
+            else 0
+        )
+        print(f"\n📊 Performance Analysis:")
+        print(f"   Iterations: {result.session.iterations} (target: 3-4)")
+        print(f"   Efficiency: {efficiency:.2f} (target: 0.40+)")
+        print(f"   ⚠️  Low efficiency indicates no memory guidance")
+        print(f"   💡 Could reduce to 3-4 iterations with memory consultation")
+
         await agent.close()
         return result.was_successful() and has_revenue
 
@@ -198,6 +215,7 @@ async def test_research_assistant(model: str = "cogito:14b") -> bool:
 
     try:
 
+        @tool()
         def search_papers(topic: str) -> List[Dict[str, str]]:
             """Search academic papers."""
             papers = {
@@ -231,6 +249,7 @@ async def test_research_assistant(model: str = "cogito:14b") -> bool:
                     return papers[key]
             return []
 
+        @tool()
         def get_statistics(topic: str) -> Dict[str, Any]:
             """Get statistical data."""
             stats = {
@@ -306,6 +325,7 @@ async def test_code_reviewer(model: str = "cogito:14b") -> bool:
 
     try:
 
+        @tool()
         def analyze_code(code: str) -> Dict[str, Any]:
             """Analyze code for issues."""
             issues = []
@@ -326,7 +346,8 @@ async def test_code_reviewer(model: str = "cogito:14b") -> bool:
                 "complexity": len(code.split("\n")),
             }
 
-        def check_security(code: str) -> Dict[str, List[str]]:
+        @tool()
+        def check_security(code: str) -> Dict[str, Any]:
             """Check for security issues."""
             vulnerabilities = []
             if "input(" in code and "eval(" in code:
@@ -412,6 +433,7 @@ async def test_task_automation_agent(model: str = "cogito:14b") -> bool:
     try:
         task_state = {"completed": [], "failed": []}
 
+        @tool()
         def execute_task(
             task_name: str, depends_on: Optional[str] = None
         ) -> Dict[str, Any]:
@@ -430,6 +452,7 @@ async def test_task_automation_agent(model: str = "cogito:14b") -> bool:
             task_state["completed"].append(task_name)
             return {"status": "success", "task": task_name}
 
+        @tool()
         def get_task_status() -> Dict[str, Any]:
             """Get current task execution status."""
             return {

@@ -483,6 +483,17 @@ class ExecutionEngine:
                 # Summarize and prune context after each iteration
                 self.context_manager.summarize_and_prune()
 
+                # Check for agent self-correction signals
+                if self.context.session.agent_signaled_stuck:
+                    await self._handle_agent_stuck(task, reasoning_context)
+
+                if self.context.session.strategy_switch_requested:
+                    await self._handle_strategy_switch_request(task, reasoning_context)
+
+                # Check for detected loops (automatic intervention)
+                if self.context.session.loop_detected:
+                    await self._handle_loop_detected(task, reasoning_context)
+
             except Exception as e:
                 # Error handling with recovery
                 await self._handle_iteration_error(e, task, iteration_results)
@@ -543,6 +554,250 @@ class ExecutionEngine:
         await self.state_machine.transition_to(
             StrategyState.EXECUTING, StateTransitionTrigger.RECOVERY_COMPLETE
         )
+
+    async def _handle_agent_stuck(
+        self, task: str, reasoning_context: ReasoningContext
+    ) -> None:
+        """Handle agent's stuck signal - attempt intervention.
+
+        When an agent signals it's stuck, the framework can:
+        1. Switch to a more robust strategy
+        2. Add strong nudges to guide the agent
+        3. Reset certain state to break loops
+
+        Args:
+            task: The original task
+            reasoning_context: Current reasoning context
+        """
+        reason = self.context.session.stuck_reason or "Unknown reason"
+        attempted = self.context.session.attempted_approaches or []
+
+        if self.agent_logger:
+            self.agent_logger.warning(
+                f"🚨 Agent signaled stuck: {reason}"
+            )
+            if attempted:
+                self.agent_logger.info(
+                    f"   Attempted approaches: {', '.join(attempted)}"
+                )
+
+        # Emit event for observers
+        self.context.emit_event(
+            AgentStateEvent.STUCK_SIGNALED,
+            {
+                "reason": reason,
+                "attempted_approaches": attempted,
+                "iteration": self.context.session.iterations,
+                "current_strategy": self.strategy_manager.get_current_strategy_name(),
+            },
+        )
+
+        # Strategy: Switch to most robust strategy if not already using it
+        current_strategy = self.strategy_manager.get_current_strategy_name()
+
+        if current_strategy != "plan_execute_reflect":
+            # Switch to plan_execute_reflect - most structured approach
+            if self.agent_logger:
+                self.agent_logger.info(
+                    f"🔄 Switching to plan_execute_reflect strategy to help agent"
+                )
+            await self.strategy_manager.switch_strategy(
+                "plan_execute_reflect", task, reasoning_context
+            )
+        else:
+            # Already in most robust strategy - add strong nudge
+            if self.agent_logger:
+                self.agent_logger.info(
+                    "💡 Already in plan_execute_reflect - adding guidance nudge"
+                )
+
+            guidance = (
+                f"You signaled being stuck: {reason}. "
+                f"Break the problem into smaller steps. "
+            )
+
+            if attempted:
+                guidance += f"You've tried: {', '.join(attempted)}. Try a different approach or request clarification if you need more information."
+            else:
+                guidance += "Consider using request_clarification if you need more information, or try a completely different approach."
+
+            self.context_manager.add_nudge(guidance)
+
+        # Reset the flag so we don't handle it again
+        self.context.session.agent_signaled_stuck = False
+        self.context.session.stuck_reason = None
+        self.context.session.attempted_approaches = []
+
+    async def _handle_strategy_switch_request(
+        self, task: str, reasoning_context: ReasoningContext
+    ) -> None:
+        """Handle agent's request to switch reasoning strategy.
+
+        The agent can request a strategy switch, but the framework has
+        final say to maintain safety and prevent infinite switching.
+
+        Args:
+            task: The original task
+            reasoning_context: Current reasoning context
+        """
+        reason = self.context.session.strategy_switch_reason or "Strategy not suitable"
+        preferred = self.context.session.preferred_strategy
+        current = self.strategy_manager.get_current_strategy_name()
+
+        if self.agent_logger:
+            target = preferred or "framework-decided"
+            self.agent_logger.info(
+                f"🔄 Agent requested strategy switch: {reason} (from {current} to {target})"
+            )
+
+        # Emit event for observers
+        self.context.emit_event(
+            AgentStateEvent.STRATEGY_SWITCH_REQUESTED,
+            {
+                "reason": reason,
+                "preferred_strategy": preferred,
+                "current_strategy": current,
+                "iteration": self.context.session.iterations,
+            },
+        )
+
+        # Evaluate the request
+        target_strategy = None
+
+        if preferred and preferred in self.strategy_manager.strategies:
+            # Agent specified a valid strategy - honor it
+            target_strategy = preferred
+            if self.agent_logger:
+                self.agent_logger.info(
+                    f"✅ Honoring agent's strategy preference: {preferred}"
+                )
+        else:
+            # Framework decides based on current strategy
+            if current == "reactive":
+                # Reactive → More structured approach
+                target_strategy = "reflect_decide_act"
+            elif current == "reflect_decide_act":
+                # RDA → Most structured approach
+                target_strategy = "plan_execute_reflect"
+            else:
+                # Already in plan_execute_reflect or unknown - stay put
+                if self.agent_logger:
+                    self.agent_logger.info(
+                        f"⚠️  Already in {current}, not switching"
+                    )
+                self.context_manager.add_nudge(
+                    f"Strategy switch requested but already using {current}. "
+                    f"Focus on completing the current task."
+                )
+
+        # Perform the switch if we have a target
+        if target_strategy and target_strategy != current:
+            if self.agent_logger:
+                self.agent_logger.info(
+                    f"🔄 Switching strategy: {current} → {target_strategy}"
+                )
+            await self.strategy_manager.switch_strategy(
+                target_strategy, task, reasoning_context
+            )
+
+        # Reset the flag
+        self.context.session.strategy_switch_requested = False
+        self.context.session.strategy_switch_reason = None
+        self.context.session.preferred_strategy = None
+
+    async def _handle_loop_detected(
+        self, task: str, reasoning_context: ReasoningContext
+    ) -> None:
+        """Handle detected loop - automatic intervention.
+
+        When the loop detector identifies a loop, the framework automatically
+        intervenes to break the agent out of unproductive patterns.
+
+        Args:
+            task: The original task
+            reasoning_context: Current reasoning context
+        """
+        loop_details = self.context.session.loop_details or {}
+        loop_type = loop_details.get("type", "unknown")
+        loop_length = loop_details.get("length", 0)
+        tool_name = loop_details.get("tool_name", "unknown")
+        recommendation = loop_details.get("recommendation", "")
+        confidence = loop_details.get("confidence", 0.0)
+
+        # Record this loop detection in cumulative history
+        self.context.session.loop_detections.append({
+            "iteration": self.context.session.iterations,
+            "type": loop_type,
+            "length": loop_length,
+            "tool_name": tool_name,
+            "confidence": confidence,
+            "timestamp": time.time(),
+        })
+
+        if self.agent_logger:
+            self.agent_logger.warning(
+                f"🔁 Loop detected: {loop_type} loop ({loop_length} repetitions) "
+                f"involving {tool_name}"
+            )
+
+        # Emit event
+        self.context.emit_event(
+            AgentStateEvent.STUCK_SIGNALED,  # Treat loop as stuck signal
+            {
+                "reason": f"Loop detected: {loop_type} ({loop_length} repetitions)",
+                "attempted_approaches": [f"{tool_name} repeated {loop_length} times"],
+                "iteration": self.context.session.iterations,
+                "loop_details": loop_details,
+                "auto_detected": True,  # Framework detected, not agent
+            },
+        )
+
+        # Decision: How to intervene based on loop type and confidence
+        current_strategy = self.strategy_manager.get_current_strategy_name()
+
+        if confidence >= 0.9:  # High confidence loop
+            # Strong intervention - switch strategy
+            if current_strategy != "plan_execute_reflect":
+                if self.agent_logger:
+                    self.agent_logger.info(
+                        f"🔄 High confidence loop ({confidence:.1%}) - switching to plan_execute_reflect"
+                    )
+                await self.strategy_manager.switch_strategy(
+                    "plan_execute_reflect", task, reasoning_context
+                )
+            else:
+                # Already in best strategy - add strong nudge + clear context
+                if self.agent_logger:
+                    self.agent_logger.info(
+                        "💡 Already in plan_execute_reflect - adding strong guidance"
+                    )
+                self.context_manager.add_nudge(
+                    f"LOOP DETECTED: You've been repeating {tool_name} {loop_length} times. "
+                    f"This approach is not working. {recommendation} "
+                    f"Try a completely different strategy or use request_clarification."
+                )
+
+        elif confidence >= 0.6:  # Medium confidence loop
+            # Moderate intervention - add nudge
+            if self.agent_logger:
+                self.agent_logger.info(
+                    f"⚠️  Possible loop detected ({confidence:.1%}) - adding guidance nudge"
+                )
+            self.context_manager.add_nudge(
+                f"Warning: You may be in a loop (repeated {tool_name} {loop_length} times). "
+                f"Consider trying a different approach."
+            )
+
+        else:  # Low confidence
+            # Light intervention - just log
+            if self.agent_logger:
+                self.agent_logger.info(
+                    f"ℹ️  Potential pattern detected ({confidence:.1%}) - monitoring"
+                )
+
+        # Reset the flags
+        self.context.session.loop_detected = False
+        self.context.session.loop_details = None
 
     async def _handle_iteration_error(
         self, error: Exception, task: str, iteration_results: list

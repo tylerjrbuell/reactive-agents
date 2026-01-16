@@ -13,12 +13,17 @@ from reactive_agents.utils.logging import Logger
 from reactive_agents.providers.llm.base import BaseModelProvider
 
 # Import our new SOLID components
-from reactive_agents.core.tools.default import FinalAnswerTool
 from reactive_agents.core.tools.tool_guard import ToolGuard
 from reactive_agents.core.tools.tool_cache import ToolCache
 from reactive_agents.core.tools.tool_confirmation import ToolConfirmation
 from reactive_agents.core.tools.tool_validator import ToolValidator
 from reactive_agents.core.tools.tool_executor import ToolExecutor
+
+# Import system tools registry
+from reactive_agents.core.tools.system_tools_registry import get_enabled_system_tools
+
+# Import loop detector
+from reactive_agents.core.engine.loop_detector import LoopDetector
 
 # Import ContextProtocol at runtime so Pydantic can resolve the forward reference
 from reactive_agents.core.context.context_protocol import ContextProtocol
@@ -63,6 +68,7 @@ class ToolManager(BaseModel):
     confirmation: Optional[ToolConfirmation] = Field(default=None, exclude=True)
     validator: Optional[ToolValidator] = Field(default=None, exclude=True)
     executor: Optional[ToolExecutor] = Field(default=None, exclude=True)
+    loop_detector: Optional[LoopDetector] = Field(default=None, exclude=True)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -91,6 +97,12 @@ class ToolManager(BaseModel):
                     ),
                     "validator": ToolValidator(context),
                     "executor": ToolExecutor(context),
+                    "loop_detector": LoopDetector(
+                        window_size=20,
+                        exact_match_threshold=3,
+                        similar_match_threshold=4,
+                        pattern_match_threshold=2,
+                    ),
                 }
             )
 
@@ -183,15 +195,64 @@ class ToolManager(BaseModel):
         if not self.tools and self.agent_logger:
             self.agent_logger.warning("No MCP client or custom tools provided")
 
-        # --- Inject final_answer tool if missing ---
-        has_final_answer = any(tool.name == "final_answer" for tool in self.tools)
-        if not has_final_answer and self.context:
-            if self.tool_logger:
-                self.tool_logger.info("Injecting internal 'final_answer' tool.")
-            internal_final_answer_tool = FinalAnswerTool(context=self.context)
-            self.tools.append(internal_final_answer_tool)
+        # --- Inject system tools from registry ---
+        self._inject_system_tools()
 
         self.register_tools()
+
+    def _inject_system_tools(self) -> None:
+        """Inject system tools from the registry.
+
+        Loads all enabled system tools from the system tools registry and injects
+        them into the tools list if not already present. This provides a centralized,
+        configurable way to manage framework-provided tools.
+        """
+        if not self.context:
+            return
+
+        # Get existing tool names to avoid duplicates
+        existing_tool_names = {tool.name for tool in self.tools}
+
+        # Load enabled system tools from registry
+        system_tools_configs = get_enabled_system_tools()
+
+        # Rebuild all system tool models ONCE to resolve ContextProtocol forward references
+        # This must happen after ContextProtocol is imported but before any instantiation
+        rebuilt_classes = set()
+        for config in system_tools_configs:
+            if config.tool_class not in rebuilt_classes:
+                try:
+                    config.tool_class.model_rebuild()
+                    rebuilt_classes.add(config.tool_class)
+                except Exception as e:
+                    if self.tool_logger:
+                        self.tool_logger.warning(
+                            f"Could not rebuild {config.tool_class.__name__}: {e}"
+                        )
+
+        injected_count = 0
+        for config in system_tools_configs:
+            if config.name not in existing_tool_names:
+                # Instantiate the tool class with context
+                try:
+                    tool_instance = config.tool_class(context=self.context)
+                    self.tools.append(tool_instance)
+                    injected_count += 1
+
+                    if self.tool_logger:
+                        self.tool_logger.debug(
+                            f"Injected system tool '{config.name}' ({config.category}): {config.description}"
+                        )
+                except Exception as e:
+                    if self.tool_logger:
+                        self.tool_logger.error(
+                            f"Failed to inject system tool '{config.name}': {e}"
+                        )
+
+        if injected_count > 0 and self.tool_logger:
+            self.tool_logger.info(
+                f"Injected {injected_count} system tools from registry"
+            )
 
     def get_tool(self, tool_name: str) -> Optional[ToolProtocol]:
         """Finds a tool by name."""
@@ -578,6 +639,46 @@ class ToolManager(BaseModel):
         # Cache successful results
         if cache_key:
             self.cache.put(cache_key, result_list, execution_time=0.1)
+
+        # Loop detection - record call and check for loops
+        if self.loop_detector and self.context and self.context.session:
+            loop_result = self.loop_detector.record_tool_call(
+                tool_name=tool_name,
+                params=params,
+                iteration=self.context.session.iterations,
+                result=result_list,
+            )
+
+            if loop_result.loop_detected:
+                # Store loop detection result in session
+                self.context.session.loop_detected = True
+                self.context.session.loop_details = {
+                    "type": loop_result.loop_type,
+                    "length": loop_result.loop_length,
+                    "tool_name": tool_name,
+                    "recommendation": loop_result.recommendation,
+                    "confidence": loop_result.confidence,
+                }
+
+                if self.tool_logger:
+                    self.tool_logger.warning(
+                        f"🔁 Loop detected: {loop_result.loop_type} "
+                        f"({loop_result.loop_length} repetitions) - {loop_result.recommendation}"
+                    )
+
+                # Emit loop detected event
+                if hasattr(self.context, "emit_event"):
+                    self.context.emit_event(
+                        AgentStateEvent.LOOP_DETECTED,
+                        {
+                            "loop_type": loop_result.loop_type,
+                            "loop_length": loop_result.loop_length,
+                            "tool_name": tool_name,
+                            "recommendation": loop_result.recommendation,
+                            "confidence": loop_result.confidence,
+                            "iteration": self.context.session.iterations,
+                        },
+                    )
 
         return result_list
 
