@@ -138,6 +138,7 @@ async def test_task_evaluation_component(infra):
     session_mock.current_task = "test task"
     session_mock.messages = []
     session_mock.iterations = 0
+    session_mock.final_answer = None  # Ensure final_answer is not a MagicMock
     comp.context.session = session_mock
     # Patch memory_manager as a MagicMock with get_memory_stats
     memory_manager_mock = MagicMock()
