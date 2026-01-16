@@ -1,7 +1,7 @@
 """
-Global pytest configuration and fixtures.
+Test fixtures for the reactive_agents test suite.
 
-This file configures pytest behavior for all tests in the project.
+Note: pytest_plugins and pytest_configure are defined in the root conftest.py.
 """
 
 import pytest
@@ -43,7 +43,7 @@ def model_validation_bypass():
     Fixture that bypasses model validation in OllamaModelProvider
     """
     with patch(
-        "reactive_agents.model_providers.ollama.OllamaModelProvider.validate_model"
+        "reactive_agents.providers.llm.ollama.OllamaModelProvider.validate_model"
     ) as mock_validate:
         # Make validate_model a no-op
         mock_validate.return_value = None

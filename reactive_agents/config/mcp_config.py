@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field, DirectoryPath, validator
+from pydantic import BaseModel, Field, DirectoryPath, field_validator
 import dotenv
 import os
 from pathlib import Path
@@ -41,7 +41,28 @@ class MCPServerConfig(BaseModel):
     )
     enabled: bool = Field(default=True, description="Whether this server is enabled")
 
-    @validator("working_dir", pre=True)
+    # Reliability configuration
+    timeout_seconds: float = Field(
+        default=30.0, ge=1.0, description="Timeout for server operations in seconds"
+    )
+    max_retries: int = Field(
+        default=3, ge=0, description="Maximum retry attempts for failed operations"
+    )
+    retry_delay_seconds: float = Field(
+        default=1.0, ge=0.1, description="Base delay between retries (uses exponential backoff)"
+    )
+    health_check_interval_seconds: float = Field(
+        default=60.0, ge=5.0, description="Interval for health checks (0 to disable)"
+    )
+    circuit_breaker_threshold: int = Field(
+        default=5, ge=1, description="Consecutive failures before circuit breaker opens"
+    )
+    circuit_breaker_reset_seconds: float = Field(
+        default=60.0, ge=5.0, description="Time before attempting to reset circuit breaker"
+    )
+
+    @field_validator("working_dir", mode="before")
+    @classmethod
     def validate_working_dir(cls, v):
         if v:
             # Support environment variable expansion
@@ -89,8 +110,8 @@ class MCPConfig(BaseModel):
         for name, server in other_config.mcpServers.items():
             if name in merged_servers:
                 # Update existing server with new values, preserving existing ones if not specified
-                current_dict = merged_servers[name].dict()
-                update_dict = server.dict()
+                current_dict = merged_servers[name].model_dump()
+                update_dict = server.model_dump()
                 merged_dict = {**current_dict, **update_dict}
                 merged_servers[name] = MCPServerConfig(**merged_dict)
             else:
@@ -236,16 +257,22 @@ def load_server_config(
 
 
 def get_mcp_servers(filter: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Get filtered server configurations in legacy format for backward compatibility"""
+    """Get filtered server configurations in legacy format for backward compatibility
+
+    Args:
+        filter: Optional list of server names to include. If None, returns all servers.
+    """
     config = load_server_config()
 
-    # # Convert to legacy format
-    # legacy_config = {
-    #     "mcpServers": {
-    #         name: {"command": server.command, "args": server.args, "env": server.env}
-    #         for name, server in config.mcpServers.items()
-    #         if server.enabled and (not filter or name in filter)
-    #     }
-    # }
+    if filter:
+        return {
+            name: server
+            for name, server in config.mcpServers.items()
+            if server.enabled and name in filter
+        }
 
-    return config.mcpServers
+    return {
+        name: server
+        for name, server in config.mcpServers.items()
+        if server.enabled
+    }

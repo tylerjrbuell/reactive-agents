@@ -1,4 +1,15 @@
 .env
 **/__pycache__
-memory
+storage/
 agent_mcp/agent.db
+reactive_agents/agent_mcp/agent.db
+.cursor
+.pytest_cache
+.vscode
+CLAUDE.md
+.serena
+provider_analysis_*
+.venv
+
+# MkDocs documentation build output
+site/

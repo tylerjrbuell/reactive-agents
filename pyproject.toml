@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "reactive-agents"
-version = "0.1.0a6"
+version = "0.1.0a7"
 description = "A custom reactive AI Agent framework for LLM-driven task execution"
 authors = ["Tyler Buell"]
 maintainers = ["Tyler Buell"]
@@ -26,6 +26,9 @@ packages = [
     { include = "reactive_agents" }
 ]
 
+[tool.poetry.scripts]
+reflex = "reactive_agents.console.cli:main"
+
 [tool.poetry.dependencies]
 python = "^3.10"
 ollama = "^0.5.1"
@@ -37,12 +40,95 @@ groq = "^0.13.0"
 markitdown = "^0.0.1a3"
 colorlog = "^6.9.0"
 mcp = "^1.4.1"
+mcp-proxy = "^0.8.0"
+tiktoken = "^0.9.0"
+chromadb = "^1.0.13"
+sentence-transformers = "^4.1.0"
+a2a-sdk = "^0.2.10"
+click = "^8.1.7"
+rich = "^13.7.0"
+openai = "^1.57.1"
+anthropic = ">=0.45.2"
+google-genai = "^1.5.0"
+google-api-core = "^2.28.1"
+instructor = {extras = ["anthropic", "google-genai"], version = "^1.10.0"}
+fastmcp = "^2.14.1"
+pysqlite3-binary = "^0.5.4.post2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.5"
 pytest-cov = "^4.1.0"
 pytest-timeout = "^2.4.0"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "^1.6.0"
+mkdocs-material = "^9.5.0"
+mkdocstrings = {extras = ["python"], version = "^0.27.0"}
+mkdocs-gen-files = "^0.5.0"
+mkdocs-literate-nav = "^0.6.0"
+mkdocs-section-index = "^0.3.0"
+
+[tool.pytest.ini_options]
+testpaths = ["reactive_agents/tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 60
+timeout_method = "thread"
+norecursedirs = [".git", "dist", "build", "*.egg-info", "playground"]
+
+addopts = [
+    "--ignore=playground",
+    "--ignore=tests/unit/test_react_agent.py",
+    "--ignore=tests/integration/test_builder_integration.py",
+    "--ignore=tests/unit/test_builders.py::test_research_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_database_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_crypto_research_agent_factory",
+    "--ignore=tests/unit/test_builders.py::test_quick_create_agent",
+    "--asyncio-mode=auto",
+    "--verbose",
+    "--tb=short",
+    "--strict-markers",
+    "--disable-warnings",
+    "--color=yes",
+    "--durations=10",
+    "--showlocals",
+]
+
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::UserWarning",
+]
+
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+    "core: Core framework tests",
+    "app: Application layer tests",
+    "providers: Provider tests",
+    "console: Console/CLI tests",
+    "plugins: Plugin tests",
+    "engine: Engine tests",
+    "tools: Tools tests",
+    "reasoning: Reasoning tests",
+    "events: Events tests",
+    "memory: Memory tests",
+    "workflows: Workflow tests",
+    "types: Type tests",
+    "agents: Agent tests",
+    "builders: Builder tests",
+    "communication: Communication tests",
+    "llm: LLM provider tests",
+    "storage: Storage provider tests",
+    "external: External provider tests",
+    "commands: Command tests",
+    "output: Output tests",
+]
 
 [build-system]
 requires = ["poetry-core"]
