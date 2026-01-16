@@ -12,6 +12,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/tylerjrbuell/reactive-agents.svg)](https://github.com/tylerjrbuell/reactive-agents/stargazers)
 
 [![Docs](https://img.shields.io/badge/docs-tylerjrbuell.github.io/reactive--agents-blue?logo=readthedocs)](https://tylerjrbuell.github.io/reactive-agents/)
+[![Discord](https://img.shields.io/badge/discord-join-7289DA?logo=discord&logoColor=white)](https://discord.gg/WVxTnHt8)
 _An Elegant, Powerful, and Flexible AI Agent Framework_
 
 [🏁 Quick Start](#quick-start) •
@@ -825,6 +826,14 @@ poetry run black .
 poetry run ruff check .
 ```
 
+## 💬 Community
+
+Join the project community on Discord for chat, support, and collaboration:
+
+- **Invite:** https://discord.gg/WVxTnHt8
+
+We welcome contributors, users, and maintainers — stop by, introduce yourself, and let us know what you're building with Reactive Agents!
+
 ### 📝 Contribution Areas
 
 - 🧠 **New Reasoning Strategies**
@@ -880,7 +889,7 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 🐛 **Report issues** to help us improve  
 💬 **Join our community** for support and discussions
 
-[**🚀 Get Started Now**](#quick-start) | [**📖 Read the Docs**](#documentation) | [**💬 Join Discord**](https://discord.gg/reactive-agents)
+[**🚀 Get Started Now**](#quick-start) | [**📖 Read the Docs**](#documentation) | [**💬 Join Discord**](https://discord.gg/WVxTnHt8)
 
 ---
 
