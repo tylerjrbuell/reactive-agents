@@ -50,6 +50,7 @@ rich = "^13.7.0"
 openai = "^1.57.1"
 anthropic = ">=0.45.2"
 google-genai = "^1.5.0"
+google-api-core = "^2.28.1"
 instructor = {extras = ["anthropic", "google-genai"], version = "^1.10.0"}
 fastmcp = "^2.14.1"
 pysqlite3-binary = "^0.5.4.post2"
