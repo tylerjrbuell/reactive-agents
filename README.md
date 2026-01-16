@@ -13,7 +13,8 @@
 
 [![Docs](https://img.shields.io/badge/docs-tylerjrbuell.github.io/reactive--agents-blue?logo=readthedocs)](https://tylerjrbuell.github.io/reactive-agents/)
 [![Discord](https://img.shields.io/badge/discord-join-7289DA?logo=discord&logoColor=white)](https://discord.gg/WVxTnHt8)
-_An Elegant, Powerful, and Flexible AI Agent Framework_
+
+_An Elegant, Powerful, and Flexible Framework for Building Reactive AI Agents_
 
 [🏁 Quick Start](#quick-start) •
 [📖 Documentation](https://tylerjrbuell.github.io/reactive-agents/) •
@@ -30,6 +31,17 @@ _An Elegant, Powerful, and Flexible AI Agent Framework_
 
 **Reactive Agents** is a cutting-edge AI agent framework that makes building intelligent, autonomous agents as simple as Laravel makes web development. With its elegant builder pattern, comprehensive tooling ecosystem, and production-ready architecture, you can create sophisticated AI agents that think, plan, execute, and adapt.
 
+### 🔎 Definition — "Reactive" (adj.)
+
+**reactive** /ˈriːæk.tɪv/
+
+1. Promptly responsive to change or external stimuli; able to sense, interpret, and act in real time.
+2. Architected for rapid feedback loops, context-aware adaptation, and low-latency decision-making.
+
+### 🚀 Why "Reactive"?
+
+**Reactive agents** turn sensing into instant value — they detect shifts, call the right tools, and adjust plans on the fly. That means faster answers, fewer failures, better user experiences, and systems that scale gracefully under real-world uncertainty. In short: reactive = faster, smarter, and more reliable AI that drives reliable outcomes now.
+
 ### 🎯 Perfect For
 
 - 🔬 **Research Automation** - Intelligent web research and data analysis
@@ -38,10 +50,21 @@ _An Elegant, Powerful, and Flexible AI Agent Framework_
 - 💬 **Customer Support** - Smart assistants with tool integration
 - 📈 **Data Processing** - Complex workflows with multiple data sources
 - 🎮 **Interactive Applications** - AI-powered user experiences
+- 🤖 **Multi-Agent Systems** - Orchestrated AI teams solving complex problems
+- ⚙️ **Automation & Scripting** - Intelligent task automation
 
 ## ✨ Key Features
 
 ### 🧠 **Multiple Reasoning Strategies**
+
+**Composable strategies with component-based architecture:** Strategies are modular and pluggable, built from discrete components (planners, executors, reflectors, and goal evaluators) that you can mix-and-match to craft custom reasoning flows.
+
+- **Modular components** — planners, executors, reflectors, and evaluators are independent and swappable.
+- **Pluggable strategies** — implement `BaseReasoningStrategy` and register with `StrategyManager` to add new strategies.
+- **Testable & reusable** — small, well-typed components make unit testing and reuse simple.
+- **Designed for composition** — use the Adaptive strategy or compose multiple strategies to handle complex, dynamic tasks.
+
+#### Pre-built strategies include:
 
 - **Reactive**: Fast, direct problem-solving
 - **Plan-Execute-Reflect**: Structured approach for complex tasks
@@ -75,7 +98,7 @@ _An Elegant, Powerful, and Flexible AI Agent Framework_
 - **Fluent Builder API** with sensible defaults
 - **Type Safety** with Pydantic models throughout
 - **Comprehensive Logging** with structured events
-- **Plugin System** for extensibility
+- **🚧 Plugin System** for extensibility
 - **Hot-reloading** for development workflows
 
 ---
@@ -424,7 +447,7 @@ async def monitor_performance():
     print(f"Model Calls: {metrics['model_calls']}")
 ```
 
-### 🔄 Plugin System
+### 🔄 Plugin System 🚧
 
 Extend the framework with plugins:
 
