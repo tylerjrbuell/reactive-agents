@@ -11,10 +11,11 @@
 [![Downloads](https://pepy.tech/badge/reactive-agents)](https://pepy.tech/project/reactive-agents)
 [![GitHub stars](https://img.shields.io/github/stars/tylerjrbuell/reactive-agents.svg)](https://github.com/tylerjrbuell/reactive-agents/stargazers)
 
+[![Docs](https://img.shields.io/badge/docs-tylerjrbuell.github.io/reactive--agents-blue?logo=readthedocs)](https://tylerjrbuell.github.io/reactive-agents/)
 _An Elegant, Powerful, and Flexible AI Agent Framework_
 
 [🏁 Quick Start](#quick-start) •
-[📖 Documentation](#documentation) •
+[📖 Documentation](https://tylerjrbuell.github.io/reactive-agents/) •
 [🎯 Features](#features) •
 [🛠️ Installation](#installation) •
 [💡 Examples](#examples) •
@@ -550,7 +551,7 @@ universal_options = {
 # Automatically optimized for each provider
 providers = [
     "openai:gpt-4o",
-    "anthropic:claude-3-5-sonnet-latest", 
+    "anthropic:claude-3-5-sonnet-latest",
     "groq:llama-3.1-8b-instant",
     "ollama:cogito:14b",
     "google:gemini-2.5-flash"
@@ -561,7 +562,7 @@ for provider_model in providers:
         .with_model(provider_model)\
         .with_model_provider_options(universal_options)\
         .build()
-    
+
     # Same code, provider-specific optimization! 🚀
     result = await agent.run("Analyze this data...")
 ```
@@ -571,6 +572,7 @@ for provider_model in providers:
 The framework uses an elegant **dual-parameter system**:
 
 #### 1️⃣ **User Interface Layer** (OpenAI-style)
+
 ```python
 # Clean, standardized interface
 {
@@ -582,6 +584,7 @@ The framework uses an elegant **dual-parameter system**:
 ```
 
 #### 2️⃣ **Provider Optimization Layer** (Native formats)
+
 ```python
 # Ollama native (automatically translated)
 {
@@ -622,14 +625,14 @@ The framework uses an elegant **dual-parameter system**:
 
 ### ✨ Key Benefits
 
-| Feature | Benefit |
-|---------|---------|
-| 🔄 **Universal Interface** | Same parameters across all providers |
-| 🎯 **Type Safety** | Full Pydantic validation for structured outputs |
-| ⚡ **Performance** | Provider-specific optimizations automatically applied |
-| 🛡️ **Reliability** | Graceful fallback when structured outputs fail |
-| 🔧 **Maintainable** | Clean separation between user interface and implementation |
-| 🚀 **Future-Proof** | Easy to add new providers following established patterns |
+| Feature                    | Benefit                                                    |
+| -------------------------- | ---------------------------------------------------------- |
+| 🔄 **Universal Interface** | Same parameters across all providers                       |
+| 🎯 **Type Safety**         | Full Pydantic validation for structured outputs            |
+| ⚡ **Performance**         | Provider-specific optimizations automatically applied      |
+| 🛡️ **Reliability**         | Graceful fallback when structured outputs fail             |
+| 🔧 **Maintainable**        | Clean separation between user interface and implementation |
+| 🚀 **Future-Proof**        | Easy to add new providers following established patterns   |
 
 ### 🧪 Testing Your Provider Setup
 
@@ -662,7 +665,7 @@ if provider == "ollama":
         "num_ctx": 8192,     # Ollama-specific: context window
     })
 
-# Anthropic with advanced parameters  
+# Anthropic with advanced parameters
 elif provider == "anthropic":
     builder.with_model_provider_options({
         "temperature": 0.2,
