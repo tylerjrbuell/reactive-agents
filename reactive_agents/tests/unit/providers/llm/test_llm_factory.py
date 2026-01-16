@@ -97,9 +97,10 @@ class TestLLMFactory:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             pytest.skip("ANTHROPIC_API_KEY not available")
 
-        with patch("anthropic.Anthropic") as mock_anthropic, \
-             patch("reactive_agents.providers.llm.anthropic.AnthropicModelProvider.validate_model",
-                   return_value={"valid": True, "model": "claude-3-5-haiku-20241022"}):
+        with patch("anthropic.Anthropic") as mock_anthropic, patch(
+            "reactive_agents.providers.llm.anthropic.AnthropicModelProvider.validate_model",
+            return_value={"valid": True, "model": "claude-3-5-haiku-20241022"},
+        ):
             provider = llm_factory.get_model_provider(
                 "anthropic:claude-3-5-haiku-20241022"
             )
@@ -185,11 +186,9 @@ class TestLLMFactory:
                     with patch("ollama.Client"), patch("ollama.AsyncClient"), patch(
                         "openai.OpenAI"
                     ), patch("anthropic.Anthropic"), patch("groq.Groq"), patch(
-                        "google.generativeai.configure"
+                        "google.genai.Client"
                     ), patch(
-                        "google.generativeai.GenerativeModel"
-                    ), patch(
-                        "google.generativeai.list_models"
+                        "google.genai.models.list"
                     ) as mock_list_models:
 
                         # Mock model validation for all providers
