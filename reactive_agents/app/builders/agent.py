@@ -310,6 +310,7 @@ class ReactiveAgentBuilder:
             "max_iterations": 10,
             "reflect_enabled": True,
             "log_level": "info",
+            "quiet_mode": False,
             "initial_task": None,
             "tool_use_enabled": True,
             "use_memory_enabled": True,
@@ -452,6 +453,21 @@ class ReactiveAgentBuilder:
         if isinstance(level, LogLevel):
             level = level.value
         self._config["log_level"] = level
+        return self
+
+    def with_quiet_mode(self, enabled: bool = True) -> "ReactiveAgentBuilder":
+        """
+        Enable quiet mode to suppress all logging except critical errors.
+
+        Args:
+            enabled: If True, suppress all output except CRITICAL level logs
+
+        Returns:
+            Self for method chaining
+        """
+        self._config["quiet_mode"] = enabled
+        if enabled:
+            self._config["log_level"] = LogLevel.CRITICAL.value
         return self
 
     # Advanced reasoning strategy methods
@@ -1578,6 +1594,19 @@ class ReactiveAgentBuilder:
             self._logger.info(
                 f"Vector memory enabled with collection: {collection_name}"
             )
+
+        # Configure logging based on builder settings
+        from reactive_agents.config.logging import configure_logging
+        log_level_str = self._config.get("log_level", "info")
+        quiet_mode = self._config.get("quiet_mode", False)
+
+        # Convert string to LogLevel enum if needed
+        if isinstance(log_level_str, str):
+            log_level = LogLevel(log_level_str.lower())
+        else:
+            log_level = log_level_str
+
+        configure_logging(level=log_level, quiet=quiet_mode)
 
         try:
             # =========================================================================

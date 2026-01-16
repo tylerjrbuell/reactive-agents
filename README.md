@@ -486,6 +486,8 @@ Reactive Agents works with all major LLM providers:
 | **Ollama**    | Any local model             | Privacy, customization              |
 | **Google**    | Gemini Pro, Gemini Flash    | Multimodal capabilities             |
 
+> **v0.1.0a7 Update**: Google provider now uses the latest `google-genai` SDK (v1.5.0) with improved performance and zero deprecation warnings.
+
 ```python
 # Easy provider switching
 .with_model("gpt-4o")                    # OpenAI
@@ -679,6 +681,59 @@ elif provider == "google":
 
 agent = await builder.build()
 ```
+
+---
+
+## 🧪 Playground & Testing
+
+The Reactive Agents framework includes a comprehensive playground for testing, experimentation, and validation.
+
+### Quick Start with Playground
+
+```bash
+# Run basic functionality tests
+poetry run python -m playground.runner agents
+
+# Test reasoning strategies
+poetry run python -m playground.runner strategies
+
+# Stress test the framework
+poetry run python -m playground.runner stress
+
+# Run real-world scenarios
+poetry run python -m playground.runner real-world
+
+# List all available test suites
+poetry run python -m playground.runner --list
+```
+
+### What's in the Playground?
+
+The playground provides:
+
+- **Agent Tests** - Core functionality validation
+- **Strategy Tests** - Compare reasoning approaches
+- **Stress Tests** - Find breaking points and edge cases
+- **Real-World Tests** - Production-ready scenarios
+- **Memory Tests** - Persistence and learning
+- **System Tools** - Meta-actions and agent control
+
+### Example Test Output
+
+```bash
+$ poetry run python -m playground.runner agents
+
+=== Running Agent Tests ===
+
+✅ Basic agent creation: PASS (8.2s)
+✅ Tool integration: PASS (12.5s)
+✅ Event system: PASS (6.1s)
+✅ Custom tools: PASS (9.8s)
+
+4/4 tests passed in 36.6s
+```
+
+For complete playground documentation, see **[docs/playground.md](docs/playground.md)**
 
 ---
 

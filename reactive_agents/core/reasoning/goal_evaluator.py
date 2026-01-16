@@ -8,8 +8,11 @@ from reactive_agents.core.reasoning.prompts.base import (
     BasePrompt,
 )
 import json
+import logging
 from typing import Any, Dict, Optional, Type
 from reactive_agents.providers.llm.base import BaseModelProvider, CompletionResponse
+
+logger = logging.getLogger(__name__)
 
 
 class TaskGoalEvaluator:
@@ -119,7 +122,7 @@ class TaskGoalEvaluator:
             content = response.message.content
             return json.loads(content)
         except Exception as e:
-            print("Evaluation parse error:", e)
+            logger.warning(f"Evaluation parse error: {e}")
             return {
                 "completion": False,
                 "completion_score": 0.0,

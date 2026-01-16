@@ -17,7 +17,10 @@ Features:
 
 from __future__ import annotations
 import asyncio
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 import uuid
 from typing import (
     Dict,
@@ -226,7 +229,7 @@ class EventBus:
                 self._stats["callbacks_invoked"] += 1
             except Exception as e:
                 self._stats["errors"] += 1
-                print(f"Error in event callback: {e}")
+                logger.error(f"Error in event callback for {event_type}: {e}", exc_info=True)
 
     async def _emit_event_async(
         self, event_type: AgentStateEvent, data: Dict[str, Any]
@@ -265,7 +268,7 @@ class EventBus:
                     tasks.append(callback(event_data))
                 except Exception as e:
                     self._stats["errors"] += 1
-                    print(f"Error in async event callback: {e}")
+                    logger.error(f"Error in async event callback for {event_type}: {e}", exc_info=True)
 
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -273,7 +276,7 @@ class EventBus:
                 for result in results:
                     if isinstance(result, Exception):
                         self._stats["errors"] += 1
-                        print(f"Error in async event callback execution: {result}")
+                        logger.error(f"Error in async event callback execution for {event_type}: {result}", exc_info=result)
                 self._stats["callbacks_invoked"] += len(tasks)
 
     # === Registration Methods ===

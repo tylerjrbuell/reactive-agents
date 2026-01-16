@@ -338,7 +338,8 @@ class PlanningComponent(BaseComponent):
         context_manager = self.engine.get_context_manager()
         plan_prompt = self.engine.get_prompt("plan_generation", task=task)
         thinking_result = await plan_prompt.get_completion()
-        print(f"thinking_result: {thinking_result}")
+        if self.agent_logger:
+            self.agent_logger.debug(f"thinking_result: {thinking_result}")
         if thinking_result:
             context_manager.add_message(
                 role="assistant",

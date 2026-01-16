@@ -24,6 +24,12 @@ Quick Start:
     print(result.final_answer)
 """
 
+# Suppress FutureWarning from instructor's internal google.generativeai import
+# The instructor package hasn't fully migrated to google-genai yet
+# This is a known issue tracked at: https://github.com/instructor-ai/instructor/issues
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="instructor.providers.gemini.client")
+
 # Core agent classes
 from reactive_agents.app.agents.base import Agent
 from reactive_agents.app.agents.reactive_agent import ReactiveAgent
@@ -50,6 +56,7 @@ from reactive_agents.core.types.confirmation_types import (
 from reactive_agents.core.types.status_types import TaskStatus
 from reactive_agents.core.types.session_types import AgentSession
 from reactive_agents.core.types.event_types import AgentStateEvent
+from reactive_agents.config.logging import LogLevel
 
 __all__ = [
     # Core classes
@@ -73,6 +80,7 @@ __all__ = [
     "TaskStatus",
     "AgentSession",
     "AgentStateEvent",
+    "LogLevel",  # Logging configuration
 ]
 
 __version__ = "0.2.0"

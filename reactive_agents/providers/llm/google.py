@@ -2,9 +2,9 @@ import json
 import os
 import time
 import asyncio
-from typing import List, Dict, Any, Optional, Union, Type, AsyncIterator
-import google.generativeai as genai  # type: ignore
-from google.generativeai.types import HarmCategory, HarmBlockThreshold  # type: ignore
+from typing import List, Dict, Any, Optional, Type, AsyncIterator, cast
+from google import genai
+from google.genai import types
 from google.api_core import exceptions as google_exceptions
 from pydantic import BaseModel
 import instructor
@@ -33,12 +33,15 @@ class GoogleModelProvider(BaseModelProvider):
         """
         super().__init__(model=model, options=options, context=context)
 
-        # Initialize Google Generative AI
-        api_key = os.getenv("GOOGLE_API_KEY")
+        # Initialize Google Gen AI Client
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is required")
+            raise ValueError(
+                "GOOGLE_API_KEY or GEMINI_API_KEY environment variable is required"
+            )
 
-        genai.configure(api_key=api_key)  # type: ignore
+        # Create the genai client
+        self.client = genai.Client(api_key=api_key)  # type: ignore
 
         # Default options
         self.default_options = {
@@ -50,15 +53,24 @@ class GoogleModelProvider(BaseModelProvider):
 
         # Safety settings (optional, can be overridden)
         # Using BLOCK_ONLY_HIGH to be less restrictive by default
-        self.default_safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        }
-
-        # Initialize the model
-        self.generative_model = genai.GenerativeModel(model_name=self.model)  # type: ignore
+        self.default_safety_settings = [
+            types.SafetySetting(
+                category="HARM_CATEGORY_HARASSMENT",  # type: ignore
+                threshold="BLOCK_ONLY_HIGH",  # type: ignore
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_HATE_SPEECH",  # type: ignore
+                threshold="BLOCK_ONLY_HIGH",  # type: ignore
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_SEXUALLY_EXPLICIT",  # type: ignore
+                threshold="BLOCK_ONLY_HIGH",  # type: ignore
+            ),
+            types.SafetySetting(
+                category="HARM_CATEGORY_DANGEROUS_CONTENT",  # type: ignore
+                threshold="BLOCK_ONLY_HIGH",  # type: ignore
+            ),
+        ]
 
         # Initialize instructor client for structured outputs
         try:
@@ -73,8 +85,7 @@ class GoogleModelProvider(BaseModelProvider):
             self.instructor_client = None
             self._supports_structured = False
 
-        # Validate model after initialization
-        self.validate_model()
+        # Note: validate_model() is async and must be called externally after initialization if needed
 
     def get_native_params(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -146,23 +157,35 @@ class GoogleModelProvider(BaseModelProvider):
         return native_params
 
     def configure_safety_settings(
-        self, safety_settings: Optional[Dict[HarmCategory, HarmBlockThreshold]] = None
+        self, safety_settings: Optional[List[types.SafetySetting]] = None
     ):
         """
         Configure safety settings for the Google model.
 
         Args:
-            safety_settings: Dictionary mapping harm categories to block thresholds
+            safety_settings: List of SafetySetting objects
                            If None, uses more permissive defaults
         """
         if safety_settings is None:
             # More permissive settings
-            self.default_safety_settings = {
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-            }
+            self.default_safety_settings = [
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HARASSMENT",  # type: ignore
+                    threshold="BLOCK_NONE",  # type: ignore
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_HATE_SPEECH",  # type: ignore
+                    threshold="BLOCK_NONE",  # type: ignore
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_SEXUALLY_EXPLICIT",  # type: ignore
+                    threshold="BLOCK_NONE",  # type: ignore
+                ),
+                types.SafetySetting(
+                    category="HARM_CATEGORY_DANGEROUS_CONTENT",  # type: ignore
+                    threshold="BLOCK_NONE",  # type: ignore
+                ),
+            ]
         else:
             self.default_safety_settings = safety_settings
 
@@ -431,19 +454,19 @@ class GoogleModelProvider(BaseModelProvider):
 
         return prepared_messages
 
-    def validate_model(self, **kwargs) -> dict:
+    async def validate_model(self, **kwargs) -> dict:
         """Validate that the model is supported by Google."""
         try:
-            # List available models
+            # List available models using the new client API
             available_models = []
-            for model in genai.list_models():  # type: ignore
-                if "generateContent" in model.supported_generation_methods:
-                    # Handle both string and Mock objects for model.name
-                    if hasattr(model.name, "split"):
-                        available_models.append(model.name.split("/")[-1])  # type: ignore
-                    else:
-                        # For Mock objects or other types, try to get the name
-                        available_models.append(str(model.name).split("/")[-1])
+            for model in self.client.models.list():  # type: ignore
+                # Extract model name from the full path (e.g., "models/gemini-pro" -> "gemini-pro")
+                model_name = (
+                    model.name if isinstance(model.name, str) else str(model.name)
+                )
+                if "/" in model_name:
+                    model_name = model_name.split("/")[-1]
+                available_models.append(model_name)
 
             if self.model not in available_models:
                 raise ValueError(
@@ -579,8 +602,6 @@ class GoogleModelProvider(BaseModelProvider):
                 if param in native_options:
                     generation_config_params[param] = native_options[param]
 
-            generation_config = genai.types.GenerationConfig(**generation_config_params)  # type: ignore
-
             # Handle JSON format
             if format == "json":
                 # For Google models, we need to add JSON instruction to the prompt
@@ -592,10 +613,10 @@ class GoogleModelProvider(BaseModelProvider):
                     )
 
             # Handle tools/function calling
-            available_functions = None
+            tool_declarations = None
             if tools:
                 # Convert tools to Google's function format
-                available_functions = []
+                tool_declarations = []
                 for tool in tools:
                     if tool.get("type") == "function":
                         func_def = tool.get("function", {})
@@ -608,49 +629,56 @@ class GoogleModelProvider(BaseModelProvider):
                             else {}
                         )
 
-                        google_func = genai.types.FunctionDeclaration(  # type: ignore
-                            name=func_def.get("name", ""),
-                            description=func_def.get("description", ""),
-                            parameters=cleaned_parameters,
+                        # Create function declaration for new SDK
+                        tool_declarations.append(
+                            {
+                                "function_declarations": [
+                                    {
+                                        "name": func_def.get("name", ""),
+                                        "description": func_def.get("description", ""),
+                                        "parameters": cleaned_parameters,
+                                    }
+                                ]
+                            }
                         )
-                        available_functions.append(google_func)
 
-                if available_functions:
-                    available_functions = genai.types.Tool(  # type: ignore
-                        function_declarations=available_functions
-                    )
+            # Build config for the new SDK
+            config_params = {
+                **generation_config_params,
+                "safety_settings": self.default_safety_settings,
+            }
 
-            # Create chat session or single generation with retry
-            if len(prepared_messages) > 1:
-                # Use chat for multi-turn conversation
-                chat = self.generative_model.start_chat(
-                    history=prepared_messages[:-1] if len(prepared_messages) > 1 else []  # type: ignore
-                )
+            if tool_declarations:
+                config_params["tools"] = tool_declarations
 
-                response = await self._retry_with_backoff(
-                    chat.send_message,
-                    prepared_messages[-1]["parts"][0],  # type: ignore
-                    generation_config=generation_config,
-                    safety_settings=self.default_safety_settings,
-                    tools=[available_functions] if available_functions else None,
-                    stream=stream,
+            config = types.GenerateContentConfig(**config_params)  # type: ignore
+
+            # Convert prepared messages to the format expected by new SDK
+            # The new SDK expects contents to be in a specific format
+            contents_str = ""
+            for msg in prepared_messages:
+                # Combine all parts into a single string
+                if "parts" in msg and msg["parts"]:
+                    contents_str += "\n".join(str(part) for part in msg["parts"]) + "\n"
+
+            # Make the API call using the new SDK
+            if stream:
+                # For streaming, we'll handle it separately
+                response = self.client.models.generate_content_stream(  # type: ignore
+                    model=self.model,
+                    contents=contents_str.strip(),
+                    config=config,
                 )
             else:
-                # Single message generation
-                content = (
-                    prepared_messages[0]["parts"][0] if prepared_messages else ""  # type: ignore
-                )
-                response = await self._retry_with_backoff(
-                    self.generative_model.generate_content,
-                    content,
-                    generation_config=generation_config,
-                    safety_settings=self.default_safety_settings,
-                    tools=[available_functions] if available_functions else None,
-                    stream=stream,
+                # Non-streaming generation
+                response = self.client.models.generate_content(  # type: ignore
+                    model=self.model,
+                    contents=contents_str.strip(),
+                    config=config,
                 )
 
             if stream:
-                return response  # Return stream object directly
+                return response  # type: ignore # Return stream object directly
 
             # Process non-streaming response
             content = ""
@@ -661,10 +689,10 @@ class GoogleModelProvider(BaseModelProvider):
             if (
                 response
                 and hasattr(response, "candidates")
-                and response.candidates
-                and len(response.candidates) > 0
+                and response.candidates  # type: ignore
+                and len(response.candidates) > 0  # type: ignore
             ):
-                candidate = response.candidates[0]
+                candidate = response.candidates[0]  # type: ignore
 
                 # Check finish reason
                 if hasattr(candidate, "finish_reason") and candidate.finish_reason:
@@ -705,7 +733,7 @@ class GoogleModelProvider(BaseModelProvider):
                     and candidate.content
                     and hasattr(candidate.content, "parts")
                 ):
-                    for part in candidate.content.parts:
+                    for part in candidate.content.parts:  # type: ignore
                         # Extract text content
                         if hasattr(part, "text") and part.text:
                             content += part.text
@@ -725,7 +753,7 @@ class GoogleModelProvider(BaseModelProvider):
                             ):
                                 if hasattr(func_call.args, "dict"):
                                     try:
-                                        args_dict = func_call.args.dict()
+                                        args_dict = func_call.args.dict()  # type: ignore
                                     except Exception:
                                         args_dict = {}
                                 elif isinstance(func_call.args, dict):
@@ -796,19 +824,19 @@ class GoogleModelProvider(BaseModelProvider):
                 done=True,
                 done_reason=done_reason,
                 prompt_tokens=(
-                    response.usage_metadata.prompt_token_count
+                    response.usage_metadata.prompt_token_count  # type: ignore
                     if response
                     and hasattr(response, "usage_metadata")
-                    and response.usage_metadata
-                    and hasattr(response.usage_metadata, "prompt_token_count")
+                    and response.usage_metadata  # type: ignore
+                    and hasattr(response.usage_metadata, "prompt_token_count")  # type: ignore
                     else 0
                 ),
                 completion_tokens=(
-                    response.usage_metadata.candidates_token_count
+                    response.usage_metadata.candidates_token_count  # type: ignore
                     if response
                     and hasattr(response, "usage_metadata")
-                    and response.usage_metadata
-                    and hasattr(response.usage_metadata, "candidates_token_count")
+                    and response.usage_metadata  # type: ignore
+                    and hasattr(response.usage_metadata, "candidates_token_count")  # type: ignore
                     else 0
                 ),
                 total_duration=None,  # Google doesn't provide timing info
@@ -873,12 +901,10 @@ class GoogleModelProvider(BaseModelProvider):
                 if param in native_options:
                     generation_config_params[param] = native_options[param]
 
-            generation_config = genai.types.GenerationConfig(**generation_config_params)  # type: ignore
-
             # Handle tools/function calling
-            available_functions = None
+            tool_declarations = None
             if tools:
-                available_functions = []
+                tool_declarations = []
                 for tool in tools:
                     if tool.get("type") == "function":
                         func_def = tool.get("function", {})
@@ -888,44 +914,47 @@ class GoogleModelProvider(BaseModelProvider):
                             if isinstance(parameters, dict)
                             else {}
                         )
-                        google_func = genai.types.FunctionDeclaration(  # type: ignore
-                            name=func_def.get("name", ""),
-                            description=func_def.get("description", ""),
-                            parameters=cleaned_parameters,
+                        # Create function declaration for new SDK
+                        tool_declarations.append(
+                            {
+                                "function_declarations": [
+                                    {
+                                        "name": func_def.get("name", ""),
+                                        "description": func_def.get("description", ""),
+                                        "parameters": cleaned_parameters,
+                                    }
+                                ]
+                            }
                         )
-                        available_functions.append(google_func)
 
-                if available_functions:
-                    available_functions = genai.types.Tool(  # type: ignore
-                        function_declarations=available_functions
-                    )
+            # Build config for the new SDK
+            config_params = {
+                **generation_config_params,
+                "safety_settings": self.default_safety_settings,
+            }
+
+            if tool_declarations:
+                config_params["tools"] = tool_declarations
+
+            config = types.GenerateContentConfig(**config_params)  # type: ignore
+
+            # Convert prepared messages to the format expected by new SDK
+            contents_str = ""
+            for msg in prepared_messages:
+                if "parts" in msg and msg["parts"]:
+                    contents_str += "\n".join(str(part) for part in msg["parts"]) + "\n"
 
             chunk_index = 0
             accumulated_content = ""
             accumulated_tool_calls: list[dict] = []
             is_final = False
 
-            # Stream from Google
-            if len(prepared_messages) > 1:
-                chat = self.generative_model.start_chat(
-                    history=prepared_messages[:-1] if len(prepared_messages) > 1 else []  # type: ignore
-                )
-                response_stream = chat.send_message(
-                    prepared_messages[-1]["parts"][0],  # type: ignore
-                    generation_config=generation_config,
-                    safety_settings=self.default_safety_settings,
-                    tools=[available_functions] if available_functions else None,
-                    stream=True,
-                )
-            else:
-                content = prepared_messages[0]["parts"][0] if prepared_messages else ""  # type: ignore
-                response_stream = self.generative_model.generate_content(
-                    content,
-                    generation_config=generation_config,
-                    safety_settings=self.default_safety_settings,
-                    tools=[available_functions] if available_functions else None,
-                    stream=True,
-                )
+            # Stream from Google using the new SDK
+            response_stream = self.client.models.generate_content_stream(  # type: ignore
+                model=self.model,
+                contents=contents_str.strip(),
+                config=config,
+            )
 
             # Process streamed chunks
             for chunk in response_stream:
@@ -946,7 +975,7 @@ class GoogleModelProvider(BaseModelProvider):
                         and candidate.content
                         and hasattr(candidate.content, "parts")
                     ):
-                        for part in candidate.content.parts:
+                        for part in candidate.content.parts:  # type: ignore
                             if hasattr(part, "text") and part.text:
                                 content += part.text
                                 accumulated_content += part.text
@@ -955,25 +984,34 @@ class GoogleModelProvider(BaseModelProvider):
                             if hasattr(part, "function_call") and part.function_call:
                                 func_call = part.function_call
                                 args_dict = {}
-                                if hasattr(func_call, "args") and func_call.args is not None:
+                                if (
+                                    hasattr(func_call, "args")
+                                    and func_call.args is not None
+                                ):
                                     try:
                                         if hasattr(func_call.args, "dict"):
-                                            args_dict = func_call.args.dict()
+                                            args_dict = func_call.args.dict()  # type: ignore
                                         elif isinstance(func_call.args, dict):
                                             args_dict = func_call.args
                                         else:
-                                            args_dict = dict(func_call.args) if func_call.args else {}
+                                            args_dict = (
+                                                dict(func_call.args)
+                                                if func_call.args
+                                                else {}
+                                            )
                                     except (TypeError, ValueError):
                                         args_dict = {}
 
-                                accumulated_tool_calls.append({
-                                    "id": f"call_{int(time.time())}_{len(accumulated_tool_calls)}",
-                                    "type": "function",
-                                    "function": {
-                                        "name": func_call.name,
-                                        "arguments": args_dict,
-                                    },
-                                })
+                                accumulated_tool_calls.append(
+                                    {
+                                        "id": f"call_{int(time.time())}_{len(accumulated_tool_calls)}",
+                                        "type": "function",
+                                        "function": {
+                                            "name": func_call.name,
+                                            "arguments": args_dict,
+                                        },
+                                    }
+                                )
 
                 # Check if this is the final chunk
                 is_final = False
@@ -999,18 +1037,28 @@ class GoogleModelProvider(BaseModelProvider):
                             finish_reason = "stop"
 
                 # Get token usage on final chunk if available
-                if is_final and hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                if (
+                    is_final
+                    and hasattr(chunk, "usage_metadata")
+                    and chunk.usage_metadata
+                ):
                     if hasattr(chunk.usage_metadata, "prompt_token_count"):
                         prompt_tokens = chunk.usage_metadata.prompt_token_count or 0
                     if hasattr(chunk.usage_metadata, "candidates_token_count"):
-                        completion_tokens = chunk.usage_metadata.candidates_token_count or 0
+                        completion_tokens = (
+                            chunk.usage_metadata.candidates_token_count or 0
+                        )
 
                 # Build stream chunk
                 stream_chunk = StreamChunk(
                     content=content,
                     role="assistant",
                     finish_reason=finish_reason,
-                    tool_calls=accumulated_tool_calls if is_final and accumulated_tool_calls else None,
+                    tool_calls=(
+                        accumulated_tool_calls
+                        if is_final and accumulated_tool_calls
+                        else None
+                    ),
                     is_final=is_final,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -1028,7 +1076,9 @@ class GoogleModelProvider(BaseModelProvider):
                     content="",
                     role="assistant",
                     finish_reason="stop",
-                    tool_calls=accumulated_tool_calls if accumulated_tool_calls else None,
+                    tool_calls=(
+                        accumulated_tool_calls if accumulated_tool_calls else None
+                    ),
                     is_final=True,
                     chunk_index=chunk_index,
                     model=self.model,

@@ -16,9 +16,13 @@ class TestGoogleModelProvider:
     def mock_genai(self):
         """Mock Google Generative AI module."""
         with patch("reactive_agents.providers.llm.google.genai") as mock:
-            # Mock model instance
-            mock_model = Mock()
-            mock.GenerativeModel.return_value = mock_model
+            # Mock the Client class
+            mock_client = Mock()
+            mock.Client.return_value = mock_client
+
+            # Mock models interface
+            mock_models = Mock()
+            mock_client.models = mock_models
 
             # Mock response
             mock_response = Mock()
@@ -36,13 +40,13 @@ class TestGoogleModelProvider:
             mock_response.usage_metadata.prompt_token_count = 100
             mock_response.usage_metadata.candidates_token_count = 50
 
-            mock_model.generate_content.return_value = mock_response
+            # Mock generate_content on the models interface
+            mock_models.generate_content.return_value = mock_response
 
-            # Mock available models
+            # Mock available models for the list method
             mock_model_info = Mock()
             mock_model_info.name = "models/gemini-2.5-flash"
-            mock_model_info.supported_generation_methods = ["generateContent"]
-            mock.list_models.return_value = [mock_model_info]
+            mock_models.list.return_value = [mock_model_info]
 
             yield mock
 
@@ -62,29 +66,30 @@ class TestGoogleModelProvider:
         """Test initialization without API key fails."""
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(
-                ValueError, match="GOOGLE_API_KEY environment variable is required"
+                ValueError, match="GOOGLE_API_KEY or GEMINI_API_KEY environment variable is required"
             ):
                 GoogleModelProvider()
 
-    def test_validate_model_success(self, mock_env, mock_genai):
+    @pytest.mark.asyncio
+    async def test_validate_model_success(self, mock_env, mock_genai):
         """Test model validation success."""
         provider = GoogleModelProvider(model="gemini-2.5-flash")
-        result = provider.validate_model()
+        result = await provider.validate_model()
         assert result["valid"] is True
         assert result["model"] == "gemini-2.5-flash"
 
-    def test_validate_model_invalid(self, mock_env, mock_genai):
+    @pytest.mark.asyncio
+    async def test_validate_model_invalid(self, mock_env, mock_genai):
         """Test model validation with invalid model."""
-        # Create provider without calling validate_model in __init__
-        with patch.object(GoogleModelProvider, "validate_model"):
-            provider = GoogleModelProvider(model="invalid-model")
+        # Create provider
+        provider = GoogleModelProvider(model="invalid-model")
 
         # Mock no models available for this specific test
-        mock_genai.list_models.return_value = []
+        provider.client.models.list.return_value = []
 
         # Now test validate_model separately - it should raise an exception
         with pytest.raises(ValueError, match="not available"):
-            provider.validate_model()
+            await provider.validate_model()
 
     @pytest.mark.asyncio
     async def test_get_chat_completion_success(self, mock_env, mock_genai):
@@ -127,15 +132,15 @@ class TestGoogleModelProvider:
         mock_response.usage_metadata.prompt_token_count = 100
         mock_response.usage_metadata.candidates_token_count = 50
 
-        with patch.object(provider, "_retry_with_backoff") as mock_retry:
-            mock_retry.return_value = mock_response
+        # Mock the new SDK's generate_content method
+        provider.client.models.generate_content.return_value = mock_response
 
-            messages = [{"role": "user", "content": "Return JSON"}]
-            result = await provider.get_chat_completion(messages=messages, format="json")
+        messages = [{"role": "user", "content": "Return JSON"}]
+        result = await provider.get_chat_completion(messages=messages, format="json")
 
-            assert isinstance(result, CompletionResponse)
-            # JSON should be cleaned (markdown removed)
-            assert result.message.content == '{"key": "value"}'
+        assert isinstance(result, CompletionResponse)
+        # JSON should be cleaned (markdown removed)
+        assert result.message.content == '{"key": "value"}'
 
     @pytest.mark.asyncio
     async def test_get_chat_completion_safety_filter(self, mock_env, mock_genai):
@@ -148,15 +153,15 @@ class TestGoogleModelProvider:
         mock_candidate.finish_reason = 3  # SAFETY
         mock_response.candidates = [mock_candidate]
 
-        with patch.object(provider, "_retry_with_backoff") as mock_retry:
-            mock_retry.return_value = mock_response
+        # Mock the new SDK's generate_content method
+        provider.client.models.generate_content.return_value = mock_response
 
-            messages = [{"role": "user", "content": "Blocked content"}]
-            result = await provider.get_chat_completion(messages=messages)
+        messages = [{"role": "user", "content": "Blocked content"}]
+        result = await provider.get_chat_completion(messages=messages)
 
-            assert isinstance(result, CompletionResponse)
-            assert result.message.content == "[Response blocked by safety filters]"
-            assert result.done_reason == "content_filter"
+        assert isinstance(result, CompletionResponse)
+        assert result.message.content == "[Response blocked by safety filters]"
+        assert result.done_reason == "content_filter"
 
     @pytest.mark.asyncio
     async def test_get_chat_completion_no_candidates(self, mock_env, mock_genai):
@@ -171,15 +176,15 @@ class TestGoogleModelProvider:
         mock_response.usage_metadata.prompt_token_count = 0
         mock_response.usage_metadata.candidates_token_count = 0
 
-        with patch.object(provider, "_retry_with_backoff") as mock_retry:
-            mock_retry.return_value = mock_response
+        # Mock the new SDK's generate_content method
+        provider.client.models.generate_content.return_value = mock_response
 
-            messages = [{"role": "user", "content": "Hello"}]
-            result = await provider.get_chat_completion(messages=messages)
+        messages = [{"role": "user", "content": "Hello"}]
+        result = await provider.get_chat_completion(messages=messages)
 
-            assert isinstance(result, CompletionResponse)
-            assert result.message.content == "[No response generated]"
-            assert result.done_reason == "error"
+        assert isinstance(result, CompletionResponse)
+        assert result.message.content == "[No response generated]"
+        assert result.done_reason == "error"
 
     @pytest.mark.asyncio
     async def test_retry_with_backoff_success(self, mock_env, mock_genai):

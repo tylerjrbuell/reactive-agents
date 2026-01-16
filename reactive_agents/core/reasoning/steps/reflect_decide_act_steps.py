@@ -102,7 +102,6 @@ class DecideNextActionStep(BaseReasoningStep):
         decision_result = await prompt.get_completion()
 
         if decision_result and decision_result.result_json:
-            # print(json.dumps(decision_result.result_json, indent=2))
             rda_state.record_decision_result(decision_result.result_json)
             rda_state.current_action = decision_result.result_json
 
@@ -120,7 +119,6 @@ class ExecuteActionStep(BaseReasoningStep):
     ) -> Optional["StrategyResult"]:
 
         rda_state = cast("ReflectDecideActState", state)
-        # print(rda_state)
         if not rda_state.current_action:
             if self.agent_logger:
                 self.agent_logger.warning("No action decided. Ending iteration.")

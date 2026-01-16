@@ -64,11 +64,11 @@ class_color_map = {
 
 # Configure root logger
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)  # Set to DEBUG to capture all levels
+logger.setLevel(logging.INFO)  # Default to INFO for production use
 
 # Create console handler with detailed formatting
 handler = StreamHandler()
-handler.setLevel(logging.DEBUG)
+handler.setLevel(logging.INFO)
 
 # Create a formatter that includes timestamp and stack info for errors
 formatter = ColoredFormatter(
@@ -89,3 +89,36 @@ logger.addHandler(handler)
 
 # Prevent logs from propagating to the root logger
 logger.propagate = False
+
+
+def configure_logging(level: LogLevel = LogLevel.INFO, quiet: bool = False):
+    """
+    Configure logging level for the framework.
+
+    Args:
+        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        quiet: If True, suppress all output except CRITICAL
+    """
+    if quiet:
+        level = LogLevel.CRITICAL
+
+    log_level = getattr(logging, level.value.upper())
+    logger.setLevel(log_level)
+
+    for handler in logger.handlers:
+        handler.setLevel(log_level)
+
+
+def get_logger(name: str, class_name: str = "agent") -> logging.LoggerAdapter:
+    """
+    Get a logger adapter with class name context.
+
+    Args:
+        name: Logger name
+        class_name: Class name for colored output (agent, tool, agent_response)
+
+    Returns:
+        LoggerAdapter configured for the component
+    """
+    base_logger = logging.getLogger(name)
+    return LoggerAdapter(base_logger, {"class_name": class_name})
